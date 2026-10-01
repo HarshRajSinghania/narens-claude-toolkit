@@ -30,7 +30,12 @@ def create(root, name, description):
     for f in dest.rglob("*"):
         if not f.is_file():
             continue
-        desc = json.dumps(description)[1:-1] if f.suffix == ".json" else description
+        if f.suffix == ".json":
+            desc = json.dumps(description)[1:-1]
+        elif f.name == "SKILL.md":
+            desc = json.dumps(description, ensure_ascii=False)  # valid YAML double-quoted scalar
+        else:
+            desc = description
         text = common.read_text(f).replace(NAME_TOKEN, name).replace(DESC_TOKEN, desc)
         common.write_text(f, text)
 

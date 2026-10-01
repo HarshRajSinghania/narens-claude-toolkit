@@ -76,16 +76,22 @@ def check_outputs(root):
     if not readme.is_file():
         errors.append("README.md: missing")
     else:
-        text = common.read_text(readme)
         try:
+            text = common.read_text(readme)
             expected = replace_between(text, render_table(items))
+        except UnicodeDecodeError as exc:
+            errors.append(f"README.md: unreadable ({exc})")
         except ValueError as exc:
             errors.append(f"README.md: {exc}")
         else:
             if expected != text:
                 errors.append(f"README.md: skill catalog is out of date; {REGEN_HINT}")
     llms = root / "llms.txt"
-    if not llms.is_file() or common.read_text(llms) != render_llms(items):
+    try:
+        llms_current = llms.is_file() and common.read_text(llms) == render_llms(items)
+    except UnicodeDecodeError:
+        llms_current = False
+    if not llms_current:
         errors.append(f"llms.txt: missing or out of date; {REGEN_HINT}")
     return errors
 

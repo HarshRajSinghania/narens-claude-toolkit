@@ -12,9 +12,19 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 KEBAB = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 
 
-def parse_frontmatter(text):
+def _unquote(value):
+    if value[0] == '"':
+        try:
+            return json.loads(value)
+        except ValueError:
+            pass
+    return value[1:-1]
+
+
+def parse_frontmatter(text, raw=False):
     """Parse simple single-line `key: value` YAML frontmatter.
 
+    Quoted values are unquoted (double quotes are JSON-unescaped) unless raw=True.
     Returns {} when there is no frontmatter or it is not terminated.
     """
     lines = text.splitlines()
@@ -27,8 +37,8 @@ def parse_frontmatter(text):
         if ":" in line and not line.startswith((" ", "\t")):
             key, _, value = line.partition(":")
             value = value.strip()
-            if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
-                value = value[1:-1]
+            if not raw and len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+                value = _unquote(value)
             data[key.strip()] = value
     return {}
 

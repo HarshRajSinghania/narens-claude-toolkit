@@ -25,6 +25,14 @@ class ParseFrontmatter(unittest.TestCase):
         text = '---\nname: demo\ndescription: "Use when a: b."\n---\n'
         self.assertEqual(common.parse_frontmatter(text)["description"], "Use when a: b.")
 
+    def test_double_quoted_value_is_unescaped(self):
+        text = '---\nname: d\ndescription: "say \\"hi\\": ok"\n---\n'
+        self.assertEqual(common.parse_frontmatter(text)["description"], 'say "hi": ok')
+
+    def test_raw_keeps_quotes(self):
+        text = '---\ndescription: "x"\n---\n'
+        self.assertEqual(common.parse_frontmatter(text, raw=True)["description"], '"x"')
+
     def test_no_frontmatter(self):
         self.assertEqual(common.parse_frontmatter("# just a heading\n"), {})
 

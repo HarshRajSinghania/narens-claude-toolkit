@@ -164,6 +164,60 @@ class ValidateTests(unittest.TestCase):
             self.assertEqual(validate.main([str(self.root)]), 1)
         self.assertIn("ERROR plugins/alpha/README.md: missing", err.getvalue())
 
+    # --- review fix pass ---------------------------------------------
+    def _write_marketplace_raw(self, plugins):
+        import json
+        (self.root / ".claude-plugin/marketplace.json").write_text(json.dumps({
+            "name": "narens-claude-skills", "owner": {"name": "Naren"}, "plugins": plugins}))
+
+    def test_plugins_not_a_list(self):
+        import json
+        helpers.make_valid_repo(self.root, ["alpha"])
+        for bad in (5, None, {"a": 1}):
+            (self.root / ".claude-plugin/marketplace.json").write_text(json.dumps({
+                "name": "narens-claude-skills", "owner": {"name": "Naren"}, "plugins": bad}))
+            self.assertHasError("'plugins' must be an array")
+
+    def test_non_string_description_is_an_error_not_a_crash(self):
+        helpers.make_valid_repo(self.root, ["alpha"])
+        helpers.edit_plugin_json(self.root, "alpha", lambda d: d.update(description=5))
+        self.assertHasError("'description' must be a non-empty string")
+
+    def test_unreadable_readme_is_an_error_not_a_crash(self):
+        helpers.make_valid_repo(self.root, ["alpha"])
+        (self.root / "README.md").write_bytes(b"\x80abc <!-- CATALOG:START -->")
+        self.assertHasError("README.md: unreadable")
+
+    def test_source_must_be_canonical(self):
+        helpers.make_valid_repo(self.root, ["alpha"])
+        for src in ("plugins/alpha", "./template", "../x"):
+            self._write_marketplace_raw([{"name": "alpha", "source": src}])
+            self.assertHasError("source %r must be './plugins/alpha'" % src)
+
+    def test_duplicate_marketplace_entries(self):
+        helpers.make_valid_repo(self.root, ["alpha"])
+        e = {"name": "alpha", "source": "./plugins/alpha"}
+        self._write_marketplace_raw([e, dict(e)])
+        self.assertHasError("duplicate plugin name 'alpha'")
+
+    def test_unquoted_description_with_colon_rejected(self):
+        helpers.make_valid_repo(self.root, ["alpha"])
+        (self.root / "plugins/alpha/skills/alpha/SKILL.md").write_text(
+            "---\nname: alpha\ndescription: Use when a: b.\n---\n")
+        self.assertHasError("wrap it in double quotes")
+
+    def test_unquoted_description_with_hash_rejected(self):
+        helpers.make_valid_repo(self.root, ["alpha"])
+        (self.root / "plugins/alpha/skills/alpha/SKILL.md").write_text(
+            "---\nname: alpha\ndescription: Use when foo #tag bar\n---\n")
+        self.assertHasError("wrap it in double quotes")
+
+    def test_quoted_description_with_colon_is_valid(self):
+        helpers.make_valid_repo(self.root, ["alpha"])
+        (self.root / "plugins/alpha/skills/alpha/SKILL.md").write_text(
+            '---\nname: alpha\ndescription: "Use when a: b #c."\n---\n')
+        self.assertEqual(self.errors(), [])
+
 
 if __name__ == "__main__":
     unittest.main()

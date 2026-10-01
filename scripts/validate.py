@@ -20,7 +20,8 @@ def check_skill(sdir, rel):
     if not common.KEBAB.match(sdir.name):
         errors.append(f"{rel}/skills/{sdir.name}: directory name must be kebab-case")
     try:
-        fm = common.parse_frontmatter(common.read_text(skill_md))
+        text = common.read_text(skill_md)
+        fm = common.parse_frontmatter(text)
     except ValueError as exc:
         return errors + [f"{where}: unreadable ({exc})"]
     if not fm.get("name"):
@@ -29,6 +30,9 @@ def check_skill(sdir, rel):
         errors.append(
             f"{where}: name {fm['name']!r} must equal directory name {sdir.name!r}"
         )
+    raw_desc = common.parse_frontmatter(text, raw=True).get("description", "")
+    if raw_desc and raw_desc[0] not in "\"'" and (": " in raw_desc or " #" in raw_desc):
+        errors.append(f"{where}: description contains ': ' or ' #'; wrap it in double quotes")
     desc = fm.get("description", "")
     if not desc:
         errors.append(f"{where}: frontmatter 'description' missing")
@@ -59,8 +63,11 @@ def check_plugin(pdir):
                     f"{pj_rel}: name {meta.get('name')!r} must equal directory name {name!r}"
                 )
             for key in ("version", "description"):
-                if not meta.get(key):
+                value = meta.get(key)
+                if value is None:
                     errors.append(f"{pj_rel}: missing '{key}'")
+                elif not isinstance(value, str) or not value.strip():
+                    errors.append(f"{pj_rel}: '{key}' must be a non-empty string")
             author = meta.get("author")
             if not isinstance(author, dict) or author.get("name") != common.OWNER_NAME:
                 errors.append(f"{pj_rel}: author.name must be '{common.OWNER_NAME}'")
@@ -94,17 +101,25 @@ def check_marketplace(root, plugin_dirs):
     owner = data.get("owner")
     if not isinstance(owner, dict) or owner.get("name") != common.OWNER_NAME:
         errors.append(f"{where}: owner.name must be '{common.OWNER_NAME}'")
+    plugins = data.get("plugins")
+    if not isinstance(plugins, list):
+        errors.append(f"{where}: 'plugins' must be an array")
+        plugins = []
     listed = set()
-    for entry in data.get("plugins", []):
+    for entry in plugins:
         if not isinstance(entry, dict):
             errors.append(f"{where}: plugin entries must be objects")
             continue
-        listed.add(entry.get("name"))
+        name = entry.get("name")
+        if name in listed:
+            errors.append(f"{where}: duplicate plugin name {name!r}")
+        listed.add(name)
         src = entry.get("source")
-        if not isinstance(src, str) or not (Path(root) / src).is_dir():
-            errors.append(
-                f"{where}: plugin {entry.get('name')!r} source {src!r} does not exist"
-            )
+        expected = f"./plugins/{name}"
+        if src != expected:
+            errors.append(f"{where}: plugin {name!r} source {src!r} must be {expected!r}")
+        elif not (Path(root) / src).is_dir():
+            errors.append(f"{where}: plugin {name!r} source {src!r} does not exist")
     for pdir in plugin_dirs:
         if pdir.name not in listed:
             errors.append(f"{where}: plugin {pdir.name!r} is not listed")

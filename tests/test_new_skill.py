@@ -51,6 +51,10 @@ class NewSkillTests(unittest.TestCase):
         new_skill.create(self.root, "quoty", desc)
         meta = common.load_json(self.root / "plugins/quoty/.claude-plugin/plugin.json")
         self.assertEqual(meta["description"], desc)
+        skill = self.root / "plugins/quoty/skills/quoty/SKILL.md"
+        raw = common.parse_frontmatter(common.read_text(skill), raw=True)["description"]
+        self.assertTrue(raw.startswith('"') and raw.endswith('"'), raw)
+        self.assertEqual(common.parse_frontmatter(common.read_text(skill))["description"], desc)
         self.assertEqual(validate.validate(self.root), [])
 
     def test_rejects_bad_name(self):
