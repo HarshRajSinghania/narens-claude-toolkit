@@ -260,7 +260,14 @@ def parse_confidence(text):
         value *= 100
     if not math.isfinite(value) or abs(value - round(value)) > 1e-6:
         raise JournalError("confidence must be a whole number (for example 70, 70% or 0.7)")
-    return int(round(value))
+    percent_value = int(round(value))
+    if not 50 <= percent_value <= 99:
+        raise JournalError(
+            f"confidence {(text or '').strip()!r} was read as {percent_value}%; it must be a whole "
+            "number from 50 to 99 (a fraction like 0.7 means 70%; below 50, flip the claim; "
+            "100 is not a prediction)"
+        )
+    return percent_value
 
 
 def _raw_id(line):
@@ -390,6 +397,9 @@ def grade_entry(path, entry_id, *, outcome=None, actual=None, note=None, force=F
 
 
 def _num_text(value):
+    """The user's own digits: whole numbers print without a trailing .0 (old logs stored 3.0)."""
+    if isinstance(value, float) and value.is_integer() and abs(value) < 1e15:
+        value = int(value)
     return str(value) if isinstance(value, int) else repr(value)
 
 
@@ -431,6 +441,10 @@ def _estimate_slice(ests):
     return {"n": len(ests), "median_ratio": statistics.median(ratios)}
 
 
+def _folded_tags(entry):
+    return [t.casefold() for t in entry.get("tags", [])]
+
+
 def compute_stats(entries):
     graded = [e for e in entries if e["status"] == "graded"]
     claims = [e for e in graded if e["type"] == "claim" and e.get("outcome") in ("yes", "no")]
@@ -462,11 +476,11 @@ def compute_stats(entries):
         result["estimates"] = {
             **_estimate_slice(ests), "range_n": len(ranged), "range_hits": hits,
         }
-    tags = sorted({t for e in claims + ests for t in e.get("tags", [])})
+    tags = sorted({t for e in claims + ests for t in _folded_tags(e)})
     for tag in tags:
         result["tags"][tag] = {
-            "claims": _claim_slice([c for c in claims if tag in c.get("tags", [])]),
-            "estimates": _estimate_slice([e for e in ests if tag in e.get("tags", [])]),
+            "claims": _claim_slice([c for c in claims if tag in _folded_tags(c)]),
+            "estimates": _estimate_slice([e for e in ests if tag in _folded_tags(e)]),
         }
     return result
 
@@ -543,7 +557,7 @@ def build_parser():
     parser = _Parser(
         prog="journal.py", description="Log predictions, grade them, and review calibration."
     )
-    sub = parser.add_subparsers(dest="cmd", required=True)
+    sub = parser.add_subparsers(dest="cmd", required=True, metavar="{add,list,grade,stats}")
 
     add = sub.add_parser("add", help="record a prediction")
     add.add_argument("--type", required=True, choices=["claim", "estimate"])
@@ -580,7 +594,9 @@ def main(argv=None):
     path = log_path()
     try:
         if args.cmd == "add":
-            confidence = parse_confidence(args.confidence) if args.confidence is not None else None
+            confidence = args.confidence
+            if confidence is not None and args.type == "claim":
+                confidence = parse_confidence(confidence)
             result = add_entry(
                 path, type=args.type, text=args.text, confidence=confidence,
                 unit=args.unit, estimate=args.estimate, range_low=args.range_low,
@@ -600,7 +616,7 @@ def main(argv=None):
             entries = entries_of(load(path))
             if args.tag:
                 tag = args.tag.strip().casefold()
-                entries = [e for e in entries if tag in e.get("tags", [])]
+                entries = [e for e in entries if tag in _folded_tags(e)]
             print(format_stats(compute_stats(entries), tag=args.tag and args.tag.strip().casefold()))
     except JournalError as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -609,7 +625,8 @@ def main(argv=None):
         print(f"error: {exc}", file=sys.stderr)
         return 1
     except OSError as exc:
-        print(f"error: cannot read or write {path}: {exc.strerror or exc}", file=sys.stderr)
+        target = exc.filename2 or exc.filename or path  # filename2 is the log when a temp-file swap fails
+        print(f"error: cannot read or write {target}: {exc.strerror or exc}", file=sys.stderr)
         return 2
     return 0
 

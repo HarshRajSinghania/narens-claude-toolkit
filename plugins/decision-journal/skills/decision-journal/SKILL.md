@@ -35,7 +35,7 @@ If a command prints an error, tell the user in one sentence what was wrong and a
 2. One entry at a time: restate the prediction and the user's number, and ask what actually happened.
 3. Record only what the user tells you in answer to that question. If you saw something in the session that hints at the outcome, mention it and ask them to confirm; never record an outcome from your own inference.
 4. If the outcome is ambiguous (partly true, or the claim's wording does not clearly apply), ask one clarifying question before recording.
-5. Run `grade`, then show its `result` line (for example "70% claim: it happened" or "2 hours estimated, 3.5 actual: 1.75x"). Never work out the ratio yourself.
+5. Run `grade`, then show its `result` line (printed only when the grade succeeds; for example "70% claim: it happened" or "2 hours estimated, 3.5 actual: 1.75x"). Never work out the ratio yourself.
 6. If `grade` says the entry is already graded, ask whether to overwrite it; use `--force` only after they say yes.
 
 ## Review calibration

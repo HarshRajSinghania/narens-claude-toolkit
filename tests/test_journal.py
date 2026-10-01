@@ -521,7 +521,7 @@ class DeferredMinorTests(JournalCase):
 
     # --- confidence input and argparse errors -----------------------------
     def test_parse_confidence(self):
-        for text, want in (("70", 70), ("70%", 70), (" 85 % ", 85), ("0.7", 70), ("0.99", 99), ("1", 100)):
+        for text, want in (("70", 70), ("70%", 70), (" 85 % ", 85), ("0.7", 70), ("0.99", 99)):
             with self.subTest(text=text):
                 self.assertEqual(journal.parse_confidence(text), want)
         for bad in ("70.5", "abc", "0.705", ""):
@@ -703,6 +703,69 @@ class ReviewFixTests(JournalCase):
         self.assertEqual(
             json.loads(out)["result"], "1 hours estimated, 12345678 actual: >1000x"
         )
+
+
+class RoundTwoMinorTests(JournalCase):
+    def test_confidence_errors_say_how_the_value_was_read(self):
+        for text, fragment in (("1", "read as 100%"), ("0.3", "read as 30%"), ("100%", "read as 100%")):
+            with self.subTest(text=text):
+                with self.assertRaises(JournalError) as cm:
+                    journal.parse_confidence(text)
+                self.assertIn(fragment, str(cm.exception))
+        code, _, err = self.run_cli("add", "--type", "claim", "--text", "x", "--confidence", "1")
+        self.assertEqual(code, 2)
+        self.assertIn("read as 100%", err)
+
+    def test_tags_match_entries_logged_with_lowercase_tags(self):
+        for tags in (["straße"], ["straße"], ["straße"], ["strasse"], ["strasse"]):
+            e = self.claim("c", 70)
+            journal.grade_entry(self.path, e["id"], outcome="yes")
+        slots = journal.load(self.path)
+        for (kind, value), tags in zip(slots, (["straße"], ["straße"], ["straße"], ["strasse"], ["strasse"])):
+            value["tags"] = tags  # as 0.1.0 stored them (lower(), not casefold())
+        journal.save(self.path, slots)
+        self.assertEqual(list(journal.compute_stats(self.read())["tags"]), ["strasse"])
+        _, out, _ = self.run_cli("stats", "--tag", "Straße")
+        self.assertIn("5 graded", out)
+
+    def test_os_error_names_the_file_that_failed(self):
+        # os.replace(tmp, log) failing: filename is the temp file, filename2 the destination log
+        failure = PermissionError(13, "Access is denied", "C:/x/.journal-1.tmp", None, "C:/the/log.jsonl")
+        with mock.patch("journal.os.replace", side_effect=failure):
+            code, _, err = self.run_cli("add", "--type", "claim", "--text", "x", "--confidence", "70")
+        self.assertEqual(code, 2)
+        self.assertIn("C:/the/log.jsonl", err)
+        self.assertNotIn(".journal-1.tmp", err)
+        with mock.patch("journal.os.replace", side_effect=OSError("disk full")):
+            code, _, err = self.run_cli("add", "--type", "claim", "--text", "x", "--confidence", "70")
+        self.assertEqual(code, 2)
+        self.assertIn(str(self.path), err)  # no filename on the error: name the log
+
+    def test_estimate_with_confidence_reports_the_real_mistake(self):
+        code, _, err = self.run_cli(
+            "add", "--type", "estimate", "--text", "x", "--unit", "hours",
+            "--estimate", "2", "--confidence", "abc",
+        )
+        self.assertEqual(code, 2)
+        self.assertIn("estimates take --estimate and --unit, not --confidence", err)
+
+    def test_missing_subcommand_message_lists_the_commands(self):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), self.assertRaises(SystemExit):
+            journal.main([])
+        self.assertIn("{add,list,grade,stats}", err.getvalue())
+        self.assertNotIn("cmd", err.getvalue())
+
+
+class LegacyNumberTests(JournalCase):
+    def test_result_line_prints_whole_floats_from_old_logs_as_whole_numbers(self):
+        # 0.1.0 and 0.1.1 stored 3.0 as a float; the result line must still say "3 hours".
+        self.estimate("m", 3)
+        slots = journal.load(self.path)
+        slots[0][1]["estimate"] = 3.0
+        journal.save(self.path, slots)
+        _, out, _ = self.run_cli("grade", "1", "--actual", "5.5")
+        self.assertEqual(json.loads(out)["result"], "3 hours estimated, 5.5 actual: 1.83x")
 
 
 if __name__ == "__main__":

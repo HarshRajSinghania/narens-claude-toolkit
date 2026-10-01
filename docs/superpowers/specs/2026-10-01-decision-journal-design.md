@@ -22,9 +22,9 @@ Success: after about 10 graded entries the user can see a pattern in plain langu
 Two prediction types, scored differently:
 
 - **claim** (yes/no), such as "this approach won't scale". Fields: `text`, `confidence` (integer 50-99, percent that the claim is true). Graded with `outcome` = yes or no.
-- **estimate** (a number), such as "this refactor takes 2 hours". Fields: `text`, `unit` (free text such as `hours`), `estimate` (number greater than 0), optional `range_low` and `range_high` (the user's 80% range, `range_low <= estimate <= range_high`). Graded with `actual` (number greater than or equal to 0).
+- **estimate** (a number), such as "this refactor takes 2 hours". Fields: `text`, `unit` (free text such as `hours`), `estimate` (number of at least 0.001), optional `range_low` and `range_high` (the user's 80% range, `range_low <= estimate <= range_high`). Graded with `actual` (number greater than or equal to 0).
 
-Every entry: `id` (integer, max existing id + 1, starting at 1), `created` (ISO date `YYYY-MM-DD`), `type`, `text`, `know_by` (optional ISO date), `tags` (list of lowercase strings), `project` (basename of the working directory at creation), `status` (`open` or `graded`), `graded` (ISO date), `outcome` or `actual`, and `note` (optional).
+Every entry: `id` (integer, max existing id + 1, starting at 1), `created` (ISO date `YYYY-MM-DD`), `type`, `text`, `know_by` (optional ISO date), `tags` (list of casefolded strings), `project` (basename of the working directory at creation), `status` (`open` or `graded`), `graded` (ISO date), `outcome` or `actual`, and `note` (optional).
 
 ## journal.py
 
@@ -39,7 +39,7 @@ Subcommands:
 
 Exit codes: 0 success; 2 invalid input (message on stderr); 1 entry not found.
 
-Validation: confidence outside 50-99 is rejected (below 50 means flip the claim; 100 is not a prediction); estimate must be greater than 0; if one of `--range-low` and `--range-high` is given, both are required, and `range_low <= estimate <= range_high`; `--outcome` on an estimate or `--actual` on a claim is rejected; dates must parse as ISO; tags are lowercased and trimmed.
+Validation: confidence outside 50-99 is rejected (below 50 means flip the claim; 100 is not a prediction); estimate must be at least 0.001; if one of `--range-low` and `--range-high` is given, both are required, and `range_low <= estimate <= range_high`; `--outcome` on an estimate or `--actual` on a claim is rejected; dates must parse as ISO; tags are casefolded and trimmed; confidence also accepts `70%` and `0.7`.
 
 Safety:
 - All writes are atomic: write a temp file in the same directory, then `os.replace`.

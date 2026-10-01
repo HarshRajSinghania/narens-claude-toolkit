@@ -9,9 +9,5 @@
   "homepage": "https://github.com/NarenDawar/narens-claude-skills/tree/main/plugins/comprehension-check",
   "repository": "https://github.com/NarenDawar/narens-claude-skills",
   "license": "MIT",
-  "keywords": [
-    "claude-code",
-    "claude-skills",
-    "agent-skills"
-  ]
+  "keywords": ["claude-code", "claude-skills", "agent-skills"]
 }
