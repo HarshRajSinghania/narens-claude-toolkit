@@ -1,0 +1,17 @@
+{
+  "session_id": "<session_id>",
+  "transcript_path": "<transcript_path>",
+  "cwd": "{PROJECT}",
+  "prompt_id": "<prompt_id>",
+  "permission_mode": "default",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Write",
+  "tool_input": {
+    "file_path": "{PROJECT}\\notes.txt",
+    "content": "hello capture"
+  },
+  "tool_use_id": "<tool_use_id>"
+}

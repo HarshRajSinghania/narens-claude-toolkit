@@ -1,0 +1,19 @@
+{
+  "session_id": "<session_id>",
+  "transcript_path": "<transcript_path>",
+  "cwd": "{PROJECT}",
+  "prompt_id": "<prompt_id>",
+  "permission_mode": "default",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Edit",
+  "tool_input": {
+    "file_path": "{PROJECT}\\notes.txt",
+    "old_string": "hello capture",
+    "new_string": "hello edited",
+    "replace_all": false
+  },
+  "tool_use_id": "<tool_use_id>"
+}

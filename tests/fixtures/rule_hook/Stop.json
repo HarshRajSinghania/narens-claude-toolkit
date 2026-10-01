@@ -1,0 +1,15 @@
+{
+  "session_id": "<session_id>",
+  "transcript_path": "<transcript_path>",
+  "cwd": "{PROJECT}",
+  "prompt_id": "<prompt_id>",
+  "permission_mode": "default",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "Stop",
+  "stop_hook_active": false,
+  "last_assistant_message": "Steps 1\u20133 are done. I skipped step 4 because no MultiEdit tool is available.\n\n- **Step 1:** I created `notes.txt` containing \"hello capture\".\n- **Step 2:** I edited it to \"hello edited\".\n- **Step 3:** `echo done` printed \"done\".\n\n`notes.txt` currently contains \"hello edited\".",
+  "background_tasks": [],
+  "session_crons": []
+}
