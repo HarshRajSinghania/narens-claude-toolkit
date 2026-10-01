@@ -28,7 +28,9 @@ Copy any `plugins/<skill-name>/skills/<skill-name>/` folder into `~/.claude/skil
 ## Skills
 
 <!-- CATALOG:START -->
-_The first skills are on the way. Star the repo to follow along._
+| Skill | What it does | Install |
+| --- | --- | --- |
+| [`comprehension-check`](plugins/comprehension-check/README.md) | Use when the user asks to be quizzed on, or to check their understanding of, code Claude wrote this session (for example 'quiz me on that' or 'do I actually understand this change?'). | `/plugin install comprehension-check@narens-claude-skills` |
 <!-- CATALOG:END -->
 
 ## Why these skills

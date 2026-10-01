@@ -8,5 +8,11 @@
     "description": "Naren's Claude skills: unique, installable Agent Skills and Claude Code plugins.",
     "version": "0.1.0"
   },
-  "plugins": []
+  "plugins": [
+    {
+      "name": "comprehension-check",
+      "source": "./plugins/comprehension-check",
+      "description": "Use when the user asks to be quizzed on, or to check their understanding of, code Claude wrote this session (for example 'quiz me on that' or 'do I actually understand this change?')."
+    }
+  ]
 }
