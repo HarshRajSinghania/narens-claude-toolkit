@@ -4,4 +4,4 @@
 
 ## Skills
 
-- Coming soon.
+- [comprehension-check](https://github.com/NarenDawar/narens-claude-skills/blob/main/plugins/comprehension-check/README.md): Use when the user asks to be quizzed on, or to check their understanding of, code Claude wrote this session (for example 'quiz me on that' or 'do I actually understand this change?').
