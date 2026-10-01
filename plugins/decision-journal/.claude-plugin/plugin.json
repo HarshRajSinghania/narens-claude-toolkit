@@ -1,6 +1,6 @@
 {
   "name": "decision-journal",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Use when the user wants to log a prediction or estimate about a dev or project decision, grade past predictions, or see how calibrated they are (for example 'log a prediction', 'grade my predictions', 'how calibrated am I?').",
   "author": {
     "name": "Naren",
@@ -9,5 +9,9 @@
   "homepage": "https://github.com/NarenDawar/narens-claude-skills/tree/main/plugins/decision-journal",
   "repository": "https://github.com/NarenDawar/narens-claude-skills",
   "license": "MIT",
-  "keywords": ["claude-code", "claude-skills", "agent-skills"]
+  "keywords": [
+    "claude-code",
+    "claude-skills",
+    "agent-skills"
+  ]
 }

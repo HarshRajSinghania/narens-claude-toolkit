@@ -5,12 +5,16 @@ Usage: python journal.py {add,list,grade,stats} ...   (standard library only)
 Log: ~/.claude/decision-journal.jsonl (override with DECISION_JOURNAL_PATH).
 """
 import argparse
+import contextlib
 import json
 import math
 import os
+import re
 import statistics
 import sys
 import tempfile
+import time
+import uuid
 from datetime import date
 from pathlib import Path
 
@@ -30,10 +34,15 @@ def log_path():
     return Path(os.environ.get("DECISION_JOURNAL_PATH") or DEFAULT_PATH)
 
 
+_ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
 def parse_date(text):
+    if not isinstance(text, str) or not _ISO_DATE.match(text):
+        raise JournalError(f"invalid date {text!r}; use YYYY-MM-DD")
     try:
         return date.fromisoformat(text)
-    except (TypeError, ValueError):
+    except ValueError:
         raise JournalError(f"invalid date {text!r}; use YYYY-MM-DD") from None
 
 
@@ -81,13 +90,24 @@ def _valid(entry):
     return not graded or (_is_number(entry.get("actual")) and entry["actual"] >= 0)
 
 
-def load(path):
-    """Read the log as slots: ("entry", dict) or ("raw", line). Malformed lines are kept."""
+def _retry_permission(action, tries=200, delay=0.01):
+    """Retry briefly on PermissionError: on Windows another process may hold the file for a moment."""
+    for attempt in range(tries):
+        try:
+            return action()
+        except PermissionError:
+            if attempt == tries - 1:
+                raise
+            time.sleep(delay)
+
+
+def _load_numbered(path):
+    """Read the log as (kind, value, line_number): kind is "entry" or "raw" (kept verbatim)."""
     path = Path(path)
     if not path.exists():
         return []
     try:
-        text = path.read_text(encoding="utf-8-sig")
+        text = _retry_permission(lambda: path.read_text(encoding="utf-8-sig"))
     except UnicodeDecodeError:
         raise JournalError(f"{path} is not valid UTF-8") from None
     slots = []
@@ -99,11 +119,16 @@ def load(path):
         except ValueError:
             obj = None
         if _valid(obj):
-            slots.append(("entry", obj))
+            slots.append(("entry", obj, number))
         else:
-            slots.append(("raw", line))
+            slots.append(("raw", line, number))
             print(f"warning: skipping malformed line {number} in {path}", file=sys.stderr)
     return slots
+
+
+def load(path):
+    """Read the log as slots: ("entry", dict) or ("raw", line). Malformed lines are kept."""
+    return [(kind, value) for kind, value, _ in _load_numbered(path)]
 
 
 def entries_of(slots):
@@ -111,8 +136,8 @@ def entries_of(slots):
 
 
 def save(path, slots):
-    """Atomically rewrite the log: temp file in the same directory, then os.replace."""
-    path = Path(path)
+    """Atomically rewrite the log (through a symlink if there is one)."""
+    path = Path(os.path.realpath(path))
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = [json.dumps(v) if kind == "entry" else v for kind, v in slots]
     data = "".join(line + "\n" for line in lines)
@@ -120,7 +145,7 @@ def save(path, slots):
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
             f.write(data)
-        os.replace(tmp, path)
+        _retry_permission(lambda: os.replace(tmp, path))
     except BaseException:
         try:
             os.unlink(tmp)
@@ -129,9 +154,76 @@ def save(path, slots):
         raise
 
 
+@contextlib.contextmanager
+def _locked(path, wait=5.0, stale=30.0):
+    """Hold a lock file next to the log so concurrent commands cannot lose updates.
+
+    The lock file holds a token; only its owner removes it. A lock older than `stale`
+    seconds (a crashed command) is cleared. If the lock file cannot be created at all
+    (for example a read-only directory) this raises PermissionError after about a second.
+    """
+    path = Path(os.path.realpath(path))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock = path.with_name(path.name + ".lock")
+    token = f"{os.getpid()}-{uuid.uuid4().hex}"
+    started = time.monotonic()
+    deadline = started + wait
+    cannot_create_deadline = started + min(1.0, wait)
+    while True:
+        try:
+            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            try:
+                os.write(fd, token.encode("ascii"))
+            finally:
+                os.close(fd)
+            break
+        except (FileExistsError, PermissionError) as exc:
+            lock_exists = True
+            try:
+                if time.time() - lock.stat().st_mtime > stale:
+                    lock.unlink()
+                    continue
+            except FileNotFoundError:
+                lock_exists = False
+            except OSError:
+                pass
+            now = time.monotonic()
+            if isinstance(exc, PermissionError) and not lock_exists and now >= cannot_create_deadline:
+                raise
+            if now >= deadline:
+                raise JournalError(
+                    f"could not lock {path}; if no other journal command is running, delete {lock}"
+                ) from None
+            time.sleep(0.01)
+    try:
+        yield
+    finally:
+        try:
+            if lock.read_text(encoding="ascii") == token:
+                lock.unlink()
+        except OSError:
+            pass
+
+
+MIN_ESTIMATE = 0.001
+
+
 def _number(value, name):
-    if value is None or isinstance(value, bool) or not math.isfinite(value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise JournalError(f"{name} must be a number")
+    try:
+        finite = math.isfinite(value)
+    except OverflowError:
+        finite = False
+    if not finite:
         raise JournalError(f"{name} must be a finite number")
+    return value
+
+
+def _clean_number(value):
+    """Store whole numbers as ints, and never -0."""
+    if isinstance(value, float) and value == int(value) and abs(value) < 1e15:
+        return int(value)
     return value
 
 
@@ -140,17 +232,47 @@ def _normalize_tags(tags):
         return []
     if isinstance(tags, str):
         tags = tags.split(",")
+    if not isinstance(tags, (list, tuple)):
+        raise JournalError("tags must be text or a list of text")
     out = []
     for tag in tags:
-        tag = tag.strip().lower()
+        if not isinstance(tag, str):
+            raise JournalError("tags must be text")
+        tag = tag.strip().casefold()
         if tag and tag not in out:
             out.append(tag)
     return out
 
 
+def parse_confidence(text):
+    """Accept 70, 70% or 0.7 (a fraction above 0 and up to 1) and return a whole percent."""
+    raw = (text or "").strip()
+    percent = raw.endswith("%")
+    if percent:
+        raw = raw[:-1].strip()
+    try:
+        value = float(raw)
+    except ValueError:
+        raise JournalError(
+            f"confidence {text!r} is not a number; use a whole number like 70, 70% or 0.7"
+        ) from None
+    if not percent and 0 < value <= 1:
+        value *= 100
+    if not math.isfinite(value) or abs(value - round(value)) > 1e-6:
+        raise JournalError("confidence must be a whole number (for example 70, 70% or 0.7)")
+    return int(round(value))
+
+
+def _raw_id(line):
+    match = re.search(r'"id"\s*:\s*(\d+)', line)
+    return int(match.group(1)) if match else None
+
+
 def add_entry(path, *, type, text, confidence=None, unit=None, estimate=None,
               range_low=None, range_high=None, know_by=None, tags=None, project=None):
-    text = (text or "").strip()
+    if not isinstance(text, str):
+        raise JournalError("text must be text")
+    text = text.strip()
     if not text:
         raise JournalError("text must not be empty")
     entry = {"id": 0, "created": today().isoformat(), "type": type, "text": text}
@@ -167,12 +289,14 @@ def add_entry(path, *, type, text, confidence=None, unit=None, estimate=None,
     elif type == "estimate":
         if confidence is not None:
             raise JournalError("estimates take --estimate and --unit, not --confidence")
+        if unit is not None and not isinstance(unit, str):
+            raise JournalError("unit must be text")
         unit = (unit or "").strip()
         if not unit:
             raise JournalError("estimates need --unit (for example hours)")
         _number(estimate, "estimate")
-        if estimate <= 0:
-            raise JournalError("estimate must be greater than 0")
+        if estimate < MIN_ESTIMATE:
+            raise JournalError(f"estimate must be at least {MIN_ESTIMATE}")
         if (range_low is None) != (range_high is None):
             raise JournalError("give both --range-low and --range-high, or neither")
         if range_low is not None:
@@ -180,17 +304,23 @@ def add_entry(path, *, type, text, confidence=None, unit=None, estimate=None,
             _number(range_high, "range-high")
             if not range_low <= estimate <= range_high:
                 raise JournalError("range must satisfy range-low <= estimate <= range-high")
-        entry.update(unit=unit, estimate=estimate, range_low=range_low, range_high=range_high)
+            range_low, range_high = _clean_number(range_low), _clean_number(range_high)
+        entry.update(
+            unit=unit, estimate=_clean_number(estimate), range_low=range_low, range_high=range_high
+        )
     else:
         raise JournalError(f"unknown type {type!r}; use claim or estimate")
     entry["know_by"] = parse_date(know_by).isoformat() if know_by else None
     entry["tags"] = _normalize_tags(tags)
-    entry["project"] = project if project is not None else Path.cwd().name
+    entry["project"] = project if project is not None else (Path.cwd().name or str(Path.cwd()))
     entry["status"] = "open"
-    slots = load(path)
-    entry["id"] = max([e["id"] for e in entries_of(slots)], default=0) + 1
-    slots.append(("entry", entry))
-    save(path, slots)
+    with _locked(path):
+        slots = load(path)
+        ids = [e["id"] for e in entries_of(slots)]
+        ids += [_raw_id(value) for kind, value in slots if kind == "raw"]
+        entry["id"] = max([i for i in ids if i is not None], default=0) + 1
+        slots.append(("entry", entry))
+        save(path, slots)
     return entry
 
 
@@ -213,36 +343,72 @@ def list_entries(path, mode=None):
     return entries
 
 
+def _join_lines(numbers):
+    if len(numbers) == 1:
+        return str(numbers[0])
+    return ", ".join(str(n) for n in numbers[:-1]) + " and " + str(numbers[-1])
+
+
 def grade_entry(path, entry_id, *, outcome=None, actual=None, note=None, force=False):
-    slots = load(path)
-    entry = next((v for kind, v in slots if kind == "entry" and v["id"] == entry_id), None)
-    if entry is None:
-        raise NotFound(f"no entry with id {entry_id}")
-    if entry["status"] == "graded" and not force:
-        raise JournalError(f"entry {entry_id} is already graded; use --force to overwrite")
-    if entry["type"] == "claim":
-        if actual is not None:
-            raise JournalError("claims are graded with --outcome yes|no, not --actual")
-        if outcome not in ("yes", "no"):
-            raise JournalError("claims need --outcome yes|no")
-    else:
-        if outcome is not None:
-            raise JournalError("estimates are graded with --actual NUMBER, not --outcome")
-        _number(actual, "actual")
-        if actual < 0:
-            raise JournalError("actual must be 0 or greater")
-    entry.pop("outcome", None)
-    entry.pop("actual", None)
-    entry["status"] = "graded"
-    entry["graded"] = today().isoformat()
-    if entry["type"] == "claim":
-        entry["outcome"] = outcome
-    else:
-        entry["actual"] = actual
-    if note is not None:
-        entry["note"] = note.strip()
-    save(path, slots)
+    with _locked(path):
+        numbered = _load_numbered(path)
+        matches = [n for kind, v, n in numbered if kind == "entry" and v["id"] == entry_id]
+        if not matches:
+            raise NotFound(f"no entry with id {entry_id}")
+        if len(matches) > 1:
+            raise JournalError(
+                f"id {entry_id} appears on lines {_join_lines(matches)}; "
+                "remove the duplicate by hand first"
+            )
+        slots = [(kind, value) for kind, value, _ in numbered]
+        entry = next(v for kind, v in slots if kind == "entry" and v["id"] == entry_id)
+        if entry["status"] == "graded" and not force:
+            raise JournalError(f"entry {entry_id} is already graded; use --force to overwrite")
+        if entry["type"] == "claim":
+            if actual is not None:
+                raise JournalError("claims are graded with --outcome yes|no, not --actual")
+            if outcome not in ("yes", "no"):
+                raise JournalError("claims need --outcome yes|no")
+        else:
+            if outcome is not None:
+                raise JournalError("estimates are graded with --actual NUMBER, not --outcome")
+            _number(actual, "actual")
+            if actual < 0:
+                raise JournalError("actual must be 0 or greater")
+        entry.pop("outcome", None)
+        entry.pop("actual", None)
+        entry["status"] = "graded"
+        entry["graded"] = today().isoformat()
+        if entry["type"] == "claim":
+            entry["outcome"] = outcome
+        else:
+            entry["actual"] = _clean_number(actual)
+        if note is not None:
+            entry["note"] = note.strip()
+        save(path, slots)
     return entry
+
+
+def _num_text(value):
+    return str(value) if isinstance(value, int) else repr(value)
+
+
+def _ratio_text(ratio):
+    if ratio > 1000:
+        return ">1000x"
+    if 0 < ratio < 0.01:
+        return "<0.01x"
+    return f"{ratio:.2f}x"
+
+
+def grade_result(entry):
+    """One-line summary of a graded entry (computed for display, never stored)."""
+    if entry["type"] == "claim":
+        happened = "it happened" if entry.get("outcome") == "yes" else "it did not happen"
+        return f"{entry['confidence']}% claim: {happened}"
+    ratio = entry["actual"] / entry["estimate"]
+    return (f"{_num_text(entry['estimate'])} {entry['unit']} estimated, "
+            f"{_num_text(entry['actual'])} actual: {_ratio_text(ratio)}")
 
 
 MIN_N = 5
@@ -339,10 +505,11 @@ def format_stats(stats, tag=None):
         lines.append("  gap = stated - actual; positive means overconfident")
     est = stats["estimates"]
     if est:
+        verdict = f" ({_verdict(est['median_ratio'])})" if est["n"] >= MIN_N else ""
         lines += [
             "",
-            f"Estimates (n={est['n']}): median actual/estimate {est['median_ratio']:.2f}x "
-            f"({_verdict(est['median_ratio'])}){_small(est['n'])}",
+            f"Estimates (n={est['n']}): median actual/estimate "
+            f"{_ratio_text(est['median_ratio'])}{verdict}{_small(est['n'])}",
         ]
         if est["range_n"]:
             pct = 100 * est["range_hits"] / est["range_n"]
@@ -361,13 +528,19 @@ def format_stats(stats, tag=None):
                 )
             if e:
                 lines.append(
-                    f"  {name}: estimates n={e['n']} median {e['median_ratio']:.2f}x{_small(e['n'])}"
+                    f"  {name}: estimates n={e['n']} median {_ratio_text(e['median_ratio'])}{_small(e['n'])}"
                 )
     return "\n".join(lines)
 
 
+class _Parser(argparse.ArgumentParser):
+    def error(self, message):
+        print(f"error: {message}", file=sys.stderr)
+        sys.exit(2)
+
+
 def build_parser():
-    parser = argparse.ArgumentParser(
+    parser = _Parser(
         prog="journal.py", description="Log predictions, grade them, and review calibration."
     )
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -375,7 +548,7 @@ def build_parser():
     add = sub.add_parser("add", help="record a prediction")
     add.add_argument("--type", required=True, choices=["claim", "estimate"])
     add.add_argument("--text", required=True)
-    add.add_argument("--confidence", type=int, help="claims: 50-99")
+    add.add_argument("--confidence", help="claims: 50-99, for example 70, 70%% or 0.7")
     add.add_argument("--unit", help="estimates: for example hours")
     add.add_argument("--estimate", type=float, help="estimates: your point estimate")
     add.add_argument("--range-low", type=float, help="estimates: low end of your 80%% range")
@@ -407,8 +580,9 @@ def main(argv=None):
     path = log_path()
     try:
         if args.cmd == "add":
+            confidence = parse_confidence(args.confidence) if args.confidence is not None else None
             result = add_entry(
-                path, type=args.type, text=args.text, confidence=args.confidence,
+                path, type=args.type, text=args.text, confidence=confidence,
                 unit=args.unit, estimate=args.estimate, range_low=args.range_low,
                 range_high=args.range_high, know_by=args.know_by, tags=args.tag,
             )
@@ -421,19 +595,22 @@ def main(argv=None):
                 path, args.id, outcome=args.outcome, actual=args.actual,
                 note=args.note, force=args.force,
             )
-            print(json.dumps(result))
+            print(json.dumps({**result, "result": grade_result(result)}))
         elif args.cmd == "stats":
             entries = entries_of(load(path))
             if args.tag:
-                tag = args.tag.strip().lower()
+                tag = args.tag.strip().casefold()
                 entries = [e for e in entries if tag in e.get("tags", [])]
-            print(format_stats(compute_stats(entries), tag=args.tag and args.tag.strip().lower()))
+            print(format_stats(compute_stats(entries), tag=args.tag and args.tag.strip().casefold()))
     except JournalError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     except NotFound as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
+    except OSError as exc:
+        print(f"error: cannot read or write {path}: {exc.strerror or exc}", file=sys.stderr)
+        return 2
     return 0
 
 

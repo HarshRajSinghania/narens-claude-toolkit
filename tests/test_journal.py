@@ -4,6 +4,8 @@ import json
 import os
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -363,7 +365,9 @@ class StatsTests(JournalCase):
         est_line = next(l for l in lines if l.startswith("Estimates (n=3)"))
         self.assertTrue(claims_line.endswith("(n<5)"), claims_line)
         self.assertTrue(est_line.endswith("(n<5)"), est_line)
-        self.assertIn("(on target)", est_line)
+        self.assertNotIn("on target", est_line)  # no verdict below n=5
+        self.assertNotIn("you run", est_line)
+        self.assertIn("1.00x", est_line)
         self.assertNotIn("Range hit", "\n".join(lines))  # no ranges recorded
 
     def test_under_and_on_target_wording(self):
@@ -449,6 +453,256 @@ class HandEditedEntryTests(JournalCase):
         self.path.write_text(json.dumps(slim) + "\n", encoding="utf-8")
         self.assertEqual(len(journal.entries_of(journal.load(self.path))), 1)
         self.assertEqual(self.run_cli("stats")[0], 0)
+
+
+class DeferredMinorTests(JournalCase):
+    # --- unreadable or unwritable log -------------------------------------
+    def test_directory_at_log_path_is_a_clean_error(self):
+        self.path.mkdir(parents=True)
+        code, _, err = self.run_cli("list")
+        self.assertEqual(code, 2)
+        self.assertTrue(err.startswith("error: cannot read or write"), err)
+
+    def test_write_failure_is_a_clean_error(self):
+        with mock.patch("journal.os.replace", side_effect=PermissionError("denied")):
+            code, _, err = self.run_cli("add", "--type", "claim", "--text", "x", "--confidence", "70")
+        self.assertEqual(code, 2)
+        self.assertIn("cannot read or write", err)
+
+    # --- ids ---------------------------------------------------------------
+    def test_duplicate_ids_stop_grading_and_name_the_lines(self):
+        e = self.claim("a", 70)
+        with open(self.path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(e) + "\n")
+        code, _, err = self.run_cli("grade", "1", "--outcome", "yes")
+        self.assertEqual(code, 2)
+        self.assertIn("lines 1 and 2", err)
+
+    def test_ids_on_malformed_lines_still_count(self):
+        self.claim("a", 70)
+        with open(self.path, "a", encoding="utf-8") as f:
+            f.write('{"id": 9, "type": "oops"}\n')
+        self.assertEqual(self.claim("b", 70)["id"], 10)
+
+    # --- numbers -----------------------------------------------------------
+    def test_numbers_are_normalised(self):
+        e = self.estimate("e", 2.0, range_low=1.0, range_high=3.0)
+        for key in ("estimate", "range_low", "range_high"):
+            self.assertIsInstance(e[key], int, key)
+        g = journal.grade_entry(self.path, e["id"], actual=-0.0)
+        self.assertIsInstance(g["actual"], int)
+        self.assertEqual(g["actual"], 0)
+        self.assertEqual(self.estimate("e", 2.5)["estimate"], 2.5)
+
+    def test_tiny_estimate_is_rejected(self):
+        with self.assertRaises(JournalError):
+            self.estimate("e", 0.0005)
+
+    def test_huge_ratio_is_capped_in_the_report(self):
+        for _ in range(5):
+            e = self.estimate("e", 1)
+            journal.grade_entry(self.path, e["id"], actual=5000)
+        text = journal.format_stats(journal.compute_stats(self.read()))
+        self.assertIn("median actual/estimate >1000x", text)
+        self.assertNotIn("inf", text)
+
+    def test_api_type_errors_are_journal_errors(self):
+        bad = [
+            dict(type="estimate", text="x", unit="hours", estimate="2"),
+            dict(type="estimate", text="x", unit="hours", estimate=10 ** 400),
+            dict(type="claim", text=5, confidence=70),
+            dict(type="estimate", text="x", unit=5, estimate=2),
+            dict(type="claim", text="x", confidence=70, tags=["a", 5]),
+        ]
+        for kwargs in bad:
+            with self.subTest(kwargs=kwargs):
+                with self.assertRaises(JournalError):
+                    journal.add_entry(self.path, project="proj", **kwargs)
+
+    # --- confidence input and argparse errors -----------------------------
+    def test_parse_confidence(self):
+        for text, want in (("70", 70), ("70%", 70), (" 85 % ", 85), ("0.7", 70), ("0.99", 99), ("1", 100)):
+            with self.subTest(text=text):
+                self.assertEqual(journal.parse_confidence(text), want)
+        for bad in ("70.5", "abc", "0.705", ""):
+            with self.subTest(bad=bad):
+                with self.assertRaises(JournalError):
+                    journal.parse_confidence(bad)
+
+    def test_cli_accepts_percent_and_fraction_confidence(self):
+        for text in ("70%", "0.7", "70"):
+            code, out, _ = self.run_cli("add", "--type", "claim", "--text", "x", "--confidence", text)
+            self.assertEqual(code, 0, text)
+            self.assertEqual(json.loads(out)["confidence"], 70)
+
+    def test_cli_bad_confidence_text_has_error_prefix(self):
+        code, _, err = self.run_cli("add", "--type", "claim", "--text", "x", "--confidence", "70.5")
+        self.assertEqual(code, 2)
+        self.assertTrue(err.startswith("error:"), err)
+
+    def test_argparse_errors_have_error_prefix(self):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), self.assertRaises(SystemExit) as cm:
+            journal.main(["add", "--type", "claim"])
+        self.assertEqual(cm.exception.code, 2)
+        self.assertTrue(err.getvalue().startswith("error:"), err.getvalue())
+
+    # --- concurrency -------------------------------------------------------
+    def test_parallel_adds_all_land(self):
+        errors = []
+
+        def worker(i):
+            try:
+                for j in range(3):
+                    journal.add_entry(
+                        self.path, type="claim", text=f"c{i}-{j}", confidence=70, project="p"
+                    )
+            except Exception as exc:  # noqa: BLE001 - collected and asserted below
+                errors.append(exc)
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(10)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(errors, [])
+        self.assertEqual(sorted(e["id"] for e in self.read()), list(range(1, 31)))
+        self.assertEqual([p.name for p in self.path.parent.iterdir()], ["j.jsonl"])
+
+    def test_stale_lock_is_cleared_and_fresh_lock_times_out(self):
+        lock = self.path.with_name(self.path.name + ".lock")
+        self.path.parent.mkdir(parents=True)
+        lock.write_text("")
+        old = time.time() - 120
+        os.utime(lock, (old, old))
+        self.claim("a")
+        self.assertFalse(lock.exists())
+        lock.write_text("")
+        with self.assertRaises(JournalError):
+            with journal._locked(self.path, wait=0.2):
+                pass
+        self.assertTrue(lock.exists())  # a fresh lock belongs to someone else
+
+    # --- grade result line -------------------------------------------------
+    def test_grade_prints_a_computed_result(self):
+        self.claim("c", 70)
+        self.claim("c2", 70)
+        self.estimate("e", 2)
+        _, out, _ = self.run_cli("grade", "1", "--outcome", "yes")
+        self.assertEqual(json.loads(out)["result"], "70% claim: it happened")
+        _, out, _ = self.run_cli("grade", "2", "--outcome", "no")
+        self.assertEqual(json.loads(out)["result"], "70% claim: it did not happen")
+        _, out, _ = self.run_cli("grade", "3", "--actual", "3.5")
+        self.assertEqual(json.loads(out)["result"], "2 hours estimated, 3.5 actual: 1.75x")
+        self.assertTrue(all("result" not in e for e in self.read()))  # computed, not stored
+
+    # --- platform quirks ---------------------------------------------------
+    def test_tags_are_casefolded(self):
+        self.assertEqual(self.claim("c", 70, tags="Straße, STRASSE")["tags"], ["strasse"])
+
+    def test_project_falls_back_to_full_path_at_drive_root(self):
+        with mock.patch("journal.Path.cwd", return_value=Path("/")):
+            e = journal.add_entry(self.path, type="claim", text="x", confidence=70)
+        self.assertEqual(e["project"], str(Path("/")))
+
+    def test_dates_are_strict_iso(self):
+        for bad in ("20261005", "2026-W40-1", "2026-1-5"):
+            with self.subTest(bad=bad):
+                with self.assertRaises(JournalError):
+                    journal.parse_date(bad)
+        self.assertEqual(journal.parse_date("2026-10-05").isoformat(), "2026-10-05")
+
+    def test_symlinked_journal_is_written_through(self):
+        real = Path(self.tmp.name) / "real.jsonl"
+        real.write_text("")
+        self.path.parent.mkdir(parents=True)
+        try:
+            os.symlink(real, self.path)
+        except (OSError, NotImplementedError):
+            self.skipTest("symlinks unavailable here")
+        self.claim("a")
+        self.assertTrue(self.path.is_symlink())
+        self.assertEqual(len(real.read_text(encoding="utf-8").splitlines()), 1)
+
+
+class ReviewFixTests(JournalCase):
+    def test_unwritable_directory_fails_fast_not_forever(self):
+        real_open = os.open
+
+        def deny(path, *args, **kwargs):
+            if str(path).endswith(".lock"):
+                raise PermissionError(13, "denied")
+            return real_open(path, *args, **kwargs)
+
+        outcome = {}
+
+        def attempt():
+            try:
+                with journal._locked(self.path, wait=0.3):
+                    outcome["ok"] = True
+            except BaseException as exc:  # noqa: BLE001 - recorded and asserted below
+                outcome["exc"] = exc
+
+        with mock.patch("journal.os.open", side_effect=deny):
+            worker = threading.Thread(target=attempt, daemon=True)
+            worker.start()
+            worker.join(5)
+            self.assertFalse(worker.is_alive(), "lock acquisition never gave up")
+            self.assertIsInstance(outcome.get("exc"), PermissionError)
+            code, _, err = self.run_cli("add", "--type", "claim", "--text", "x", "--confidence", "70")
+        self.assertEqual(code, 2)
+        self.assertIn("cannot read or write", err)
+
+    def test_readers_and_writers_do_not_collide(self):
+        errors = []
+        stop = threading.Event()
+
+        def writer(i):
+            try:
+                for j in range(15):
+                    journal.add_entry(
+                        self.path, type="claim", text=f"c{i}-{j}", confidence=70, project="p"
+                    )
+            except Exception as exc:  # noqa: BLE001
+                errors.append(("write", exc))
+
+        def reader():
+            try:
+                while not stop.is_set():
+                    journal.list_entries(self.path)
+            except Exception as exc:  # noqa: BLE001
+                errors.append(("read", exc))
+
+        readers = [threading.Thread(target=reader) for _ in range(2)]
+        writers = [threading.Thread(target=writer, args=(i,)) for i in range(4)]
+        for t in readers + writers:
+            t.start()
+        for t in writers:
+            t.join()
+        stop.set()
+        for t in readers:
+            t.join()
+        self.assertEqual(errors, [])
+        self.assertEqual(len(self.read()), 60)
+
+    def test_lock_release_leaves_a_lock_someone_else_took(self):
+        lock = self.path.with_name(self.path.name + ".lock")
+        with journal._locked(self.path):
+            lock.write_text("someone-else")  # our lock was stolen and replaced while we held it
+        self.assertTrue(lock.exists())
+        self.assertEqual(lock.read_text(), "someone-else")
+
+    def test_grade_result_keeps_large_and_precise_numbers(self):
+        self.estimate("big", 2500000, unit="bytes")
+        _, out, _ = self.run_cli("grade", "1", "--actual", "2.718281828")
+        self.assertEqual(
+            json.loads(out)["result"], "2500000 bytes estimated, 2.718281828 actual: <0.01x"
+        )
+        self.estimate("e2", 1)
+        _, out, _ = self.run_cli("grade", "2", "--actual", "12345678")
+        self.assertEqual(
+            json.loads(out)["result"], "1 hours estimated, 12345678 actual: >1000x"
+        )
 
 
 if __name__ == "__main__":
