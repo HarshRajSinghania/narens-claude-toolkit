@@ -270,5 +270,122 @@ class CliTests(JournalCase):
         self.assertEqual(cm.exception.code, 2)
 
 
+class StatsTests(JournalCase):
+    def build_dataset(self):
+        """13 graded claims and 5 graded estimates with known, hand-computed results."""
+        for conf, outcomes, tag in ((80, "yyyynn", "perf"), (70, "yyynn", "api"), (60, "yn", "api")):
+            for o in outcomes:
+                e = self.claim("c", conf, tags=tag)
+                journal.grade_entry(self.path, e["id"], outcome="yes" if o == "y" else "no")
+        for est, actual, lo, hi in ((2, 3, 1.5, 2.5), (4, 4, 3, 5), (1, 2, 0.5, 1.5),
+                                    (10, 8, 7, 13), (3, 6, None, None)):
+            e = self.estimate("e", est, range_low=lo, range_high=hi, tags="refactor")
+            journal.grade_entry(self.path, e["id"], actual=actual)
+
+    def stats(self, tag=None):
+        entries = self.read()
+        if tag:
+            entries = [e for e in entries if tag in e["tags"]]
+        return journal.compute_stats(entries)
+
+    def test_compute_stats_known_values(self):
+        self.build_dataset()
+        self.claim("still open", 90)  # open entries are ignored
+        s = self.stats()
+        self.assertEqual((s["graded"], s["claim_count"], s["estimate_count"], s["too_few"]),
+                         (18, 13, 5, False))
+        self.assertAlmostEqual(s["claims"]["brier"], 3.21 / 13, places=9)
+        by_label = {b["label"]: b for b in s["claims"]["buckets"]}
+        self.assertEqual(list(by_label), ["60-69", "70-79", "80-89"])
+        self.assertEqual((by_label["80-89"]["n"], by_label["80-89"]["stated"]), (6, 80))
+        self.assertAlmostEqual(by_label["80-89"]["actual"], 200 / 3)
+        self.assertAlmostEqual(by_label["80-89"]["gap"], 80 - 200 / 3)
+        self.assertEqual((by_label["70-79"]["n"], by_label["70-79"]["actual"]), (5, 60))
+        self.assertEqual((by_label["60-69"]["n"], by_label["60-69"]["actual"]), (2, 50))
+        self.assertEqual(s["estimates"]["n"], 5)
+        self.assertAlmostEqual(s["estimates"]["median_ratio"], 1.5)
+        self.assertEqual((s["estimates"]["range_n"], s["estimates"]["range_hits"]), (4, 2))
+        self.assertEqual(sorted(s["tags"]), ["api", "perf", "refactor"])
+        self.assertEqual(s["tags"]["perf"]["claims"]["n"], 6)
+        self.assertIsNone(s["tags"]["perf"]["estimates"])
+        self.assertAlmostEqual(s["tags"]["refactor"]["estimates"]["median_ratio"], 1.5)
+
+    def test_format_known_report(self):
+        self.build_dataset()
+        text = journal.format_stats(self.stats())
+        self.assertEqual(
+            text.splitlines(),
+            [
+                "Decision journal: 18 graded (13 claims, 5 estimates)",
+                "",
+                "Claims (n=13): Brier 0.247",
+                "  60-69  n=2  stated 60%  actual 50%  gap +10  (n<5)",
+                "  70-79  n=5  stated 70%  actual 60%  gap +10",
+                "  80-89  n=6  stated 80%  actual 67%  gap +13",
+                "  gap = stated - actual; positive means overconfident",
+                "",
+                "Estimates (n=5): median actual/estimate 1.50x (you run over)",
+                "  Range hit: 2 of 4 = 50% (an 80% range should hit about 80%)",
+                "",
+                "By tag:",
+                "  api: claims n=7 stated 67% actual 57% gap +10",
+                "  perf: claims n=6 stated 80% actual 67% gap +13",
+                "  refactor: estimates n=5 median 1.50x",
+            ],
+        )
+
+    def test_too_few_prints_counts_only(self):
+        for i in range(4):
+            e = self.claim("c", 70)
+            journal.grade_entry(self.path, e["id"], outcome="yes")
+        text = journal.format_stats(self.stats())
+        self.assertIn("Decision journal: 4 graded (4 claims, 0 estimates)", text)
+        self.assertIn("Too few graded entries to conclude (need at least 5).", text)
+        self.assertNotIn("Brier", text)
+        e = self.claim("c", 70)
+        journal.grade_entry(self.path, e["id"], outcome="no")
+        self.assertNotIn("Too few", journal.format_stats(self.stats()))
+
+    def test_empty_journal(self):
+        text = journal.format_stats(journal.compute_stats([]))
+        self.assertIn("0 graded (0 claims, 0 estimates)", text)
+        self.assertIn("Too few graded entries", text)
+
+    def test_small_slices_are_marked(self):
+        for conf, o in ((70, "yes"), (70, "no")):
+            e = self.claim("c", conf)
+            journal.grade_entry(self.path, e["id"], outcome=o)
+        for actual in (2, 2, 2):
+            e = self.estimate("e", 2)
+            journal.grade_entry(self.path, e["id"], actual=actual)
+        lines = journal.format_stats(self.stats()).splitlines()
+        claims_line = next(l for l in lines if l.startswith("Claims (n=2)"))
+        est_line = next(l for l in lines if l.startswith("Estimates (n=3)"))
+        self.assertTrue(claims_line.endswith("(n<5)"), claims_line)
+        self.assertTrue(est_line.endswith("(n<5)"), est_line)
+        self.assertIn("(on target)", est_line)
+        self.assertNotIn("Range hit", "\n".join(lines))  # no ranges recorded
+
+    def test_under_and_on_target_wording(self):
+        for actual, expect in ((1, "0.50x (you run under)"), (2, "1.00x (on target)")):
+            self.path.unlink(missing_ok=True)
+            for _ in range(5):
+                e = self.estimate("e", 2)
+                journal.grade_entry(self.path, e["id"], actual=actual)
+            self.assertIn(expect, journal.format_stats(self.stats()))
+
+    def test_cli_stats_and_tag_filter(self):
+        self.build_dataset()
+        code, out, _ = self.run_cli("stats")
+        self.assertEqual(code, 0)
+        self.assertIn("Claims (n=13): Brier 0.247", out)
+        code, out, _ = self.run_cli("stats", "--tag", "perf")
+        self.assertIn("Decision journal (tag: perf): 6 graded (6 claims, 0 estimates)", out)
+        self.assertIn("80-89  n=6", out)
+        code, out, _ = self.run_cli("stats", "--tag", "nope")
+        self.assertIn("0 graded", out)
+        self.assertIn("Too few graded entries", out)
+
+
 if __name__ == "__main__":
     unittest.main()

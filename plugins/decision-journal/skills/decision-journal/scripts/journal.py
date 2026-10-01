@@ -8,6 +8,7 @@ import argparse
 import json
 import math
 import os
+import statistics
 import sys
 import tempfile
 from datetime import date
@@ -216,6 +217,127 @@ def grade_entry(path, entry_id, *, outcome=None, actual=None, note=None, force=F
     return entry
 
 
+MIN_N = 5
+BUCKETS = ((50, 59), (60, 69), (70, 79), (80, 89), (90, 99))
+
+
+def _claim_slice(claims):
+    n = len(claims)
+    if not n:
+        return None
+    stated = sum(c["confidence"] for c in claims) / n
+    actual = 100 * sum(1 for c in claims if c["outcome"] == "yes") / n
+    return {"n": n, "stated": stated, "actual": actual, "gap": stated - actual}
+
+
+def _estimate_slice(ests):
+    if not ests:
+        return None
+    ratios = [e["actual"] / e["estimate"] for e in ests]
+    return {"n": len(ests), "median_ratio": statistics.median(ratios)}
+
+
+def compute_stats(entries):
+    graded = [e for e in entries if e["status"] == "graded"]
+    claims = [e for e in graded if e["type"] == "claim" and e.get("outcome") in ("yes", "no")]
+    ests = [e for e in graded
+            if e["type"] == "estimate" and isinstance(e.get("actual"), (int, float))]
+    result = {
+        "graded": len(claims) + len(ests),
+        "claim_count": len(claims),
+        "estimate_count": len(ests),
+        "too_few": len(claims) + len(ests) < MIN_N,
+        "claims": None,
+        "estimates": None,
+        "tags": {},
+    }
+    if claims:
+        brier = sum(
+            (c["confidence"] / 100 - (1 if c["outcome"] == "yes" else 0)) ** 2 for c in claims
+        ) / len(claims)
+        buckets = []
+        for low, high in BUCKETS:
+            part = _claim_slice([c for c in claims if low <= c["confidence"] <= high])
+            if part:
+                buckets.append({"label": f"{low}-{high}", **part})
+        result["claims"] = {"n": len(claims), "brier": brier, "buckets": buckets}
+    if ests:
+        ranged = [e for e in ests
+                  if e.get("range_low") is not None and e.get("range_high") is not None]
+        hits = sum(1 for e in ranged if e["range_low"] <= e["actual"] <= e["range_high"])
+        result["estimates"] = {
+            **_estimate_slice(ests), "range_n": len(ranged), "range_hits": hits,
+        }
+    tags = sorted({t for e in claims + ests for t in e.get("tags", [])})
+    for tag in tags:
+        result["tags"][tag] = {
+            "claims": _claim_slice([c for c in claims if tag in c.get("tags", [])]),
+            "estimates": _estimate_slice([e for e in ests if tag in e.get("tags", [])]),
+        }
+    return result
+
+
+def _plural(n, word):
+    return f"{n} {word}{'' if n == 1 else 's'}"
+
+
+def _small(n):
+    return "  (n<5)" if n < MIN_N else ""
+
+
+def _verdict(ratio):
+    if round(ratio, 2) == 1.0:
+        return "on target"
+    return "you run over" if ratio > 1 else "you run under"
+
+
+def format_stats(stats, tag=None):
+    label = f" (tag: {tag})" if tag else ""
+    lines = [
+        f"Decision journal{label}: {stats['graded']} graded "
+        f"({_plural(stats['claim_count'], 'claim')}, {_plural(stats['estimate_count'], 'estimate')})"
+    ]
+    if stats["too_few"]:
+        lines.append(f"Too few graded entries to conclude (need at least {MIN_N}).")
+        return "\n".join(lines)
+    claims = stats["claims"]
+    if claims:
+        lines += ["", f"Claims (n={claims['n']}): Brier {claims['brier']:.3f}{_small(claims['n'])}"]
+        for b in claims["buckets"]:
+            lines.append(
+                f"  {b['label']}  n={b['n']}  stated {b['stated']:.0f}%  "
+                f"actual {b['actual']:.0f}%  gap {b['gap']:+.0f}{_small(b['n'])}"
+            )
+        lines.append("  gap = stated - actual; positive means overconfident")
+    est = stats["estimates"]
+    if est:
+        lines += [
+            "",
+            f"Estimates (n={est['n']}): median actual/estimate {est['median_ratio']:.2f}x "
+            f"({_verdict(est['median_ratio'])}){_small(est['n'])}",
+        ]
+        if est["range_n"]:
+            pct = 100 * est["range_hits"] / est["range_n"]
+            lines.append(
+                f"  Range hit: {est['range_hits']} of {est['range_n']} = {pct:.0f}% "
+                "(an 80% range should hit about 80%)"
+            )
+    if stats["tags"]:
+        lines += ["", "By tag:"]
+        for name, parts in stats["tags"].items():
+            c, e = parts["claims"], parts["estimates"]
+            if c:
+                lines.append(
+                    f"  {name}: claims n={c['n']} stated {c['stated']:.0f}% "
+                    f"actual {c['actual']:.0f}% gap {c['gap']:+.0f}{_small(c['n'])}"
+                )
+            if e:
+                lines.append(
+                    f"  {name}: estimates n={e['n']} median {e['median_ratio']:.2f}x{_small(e['n'])}"
+                )
+    return "\n".join(lines)
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="journal.py", description="Log predictions, grade them, and review calibration."
@@ -244,6 +366,8 @@ def build_parser():
     grade.add_argument("--actual", type=float)
     grade.add_argument("--note")
     grade.add_argument("--force", action="store_true", help="overwrite an existing grade")
+    stats = sub.add_parser("stats", help="print the calibration report")
+    stats.add_argument("--tag", help="only entries carrying this tag")
     return parser
 
 
@@ -270,6 +394,12 @@ def main(argv=None):
                 note=args.note, force=args.force,
             )
             print(json.dumps(result))
+        elif args.cmd == "stats":
+            entries = entries_of(load(path))
+            if args.tag:
+                tag = args.tag.strip().lower()
+                entries = [e for e in entries if tag in e.get("tags", [])]
+            print(format_stats(compute_stats(entries), tag=args.tag and args.tag.strip().lower()))
     except JournalError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
