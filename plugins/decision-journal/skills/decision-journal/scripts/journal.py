@@ -42,15 +42,43 @@ def today():
     return parse_date(raw) if raw else date.today()
 
 
+def _is_number(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
 def _valid(entry):
-    return (
+    """True only for entries whose fields have the right types and ranges."""
+    if not (
         isinstance(entry, dict)
         and isinstance(entry.get("id"), int)
+        and not isinstance(entry.get("id"), bool)
         and entry.get("type") in REQUIRED
         and isinstance(entry.get("text"), str)
         and entry.get("status") in ("open", "graded")
-        and all(key in entry for key in REQUIRED[entry["type"]])
-    )
+    ):
+        return False
+    tags = entry.get("tags", [])
+    if not (isinstance(tags, list) and all(isinstance(t, str) for t in tags)):
+        return False
+    if entry.get("know_by") is not None and not isinstance(entry["know_by"], str):
+        return False
+    graded = entry["status"] == "graded"
+    if entry["type"] == "claim":
+        confidence = entry.get("confidence")
+        if not (isinstance(confidence, int) and not isinstance(confidence, bool)
+                and 50 <= confidence <= 99):
+            return False
+        return not graded or entry.get("outcome") in ("yes", "no")
+    if not isinstance(entry.get("unit"), str):
+        return False
+    if not _is_number(entry.get("estimate")) or entry["estimate"] <= 0:
+        return False
+    low, high = entry.get("range_low"), entry.get("range_high")
+    if (low is None) != (high is None):
+        return False
+    if low is not None and not (_is_number(low) and _is_number(high)):
+        return False
+    return not graded or (_is_number(entry.get("actual")) and entry["actual"] >= 0)
 
 
 def load(path):
@@ -320,7 +348,7 @@ def format_stats(stats, tag=None):
             pct = 100 * est["range_hits"] / est["range_n"]
             lines.append(
                 f"  Range hit: {est['range_hits']} of {est['range_n']} = {pct:.0f}% "
-                "(an 80% range should hit about 80%)"
+                f"(an 80% range should hit about 80%){_small(est['range_n'])}"
             )
     if stats["tags"]:
         lines += ["", "By tag:"]

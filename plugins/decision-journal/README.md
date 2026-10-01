@@ -59,7 +59,7 @@ Claims (n=13): Brier 0.247
   70-79  n=5  stated 70%  actual 60%  gap +10
   80-89  n=6  stated 80%  actual 67%  gap +13
 Estimates (n=5): median actual/estimate 1.50x (you run over)
-  Range hit: 2 of 4 = 50% (an 80% range should hit about 80%)
+  Range hit: 2 of 4 = 50% (an 80% range should hit about 80%)  (n<5)
 ```
 
 With fewer than 5 graded entries, or a slice smaller than 5, it says there is not enough data instead of inventing a pattern.

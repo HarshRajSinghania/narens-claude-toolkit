@@ -325,7 +325,7 @@ class StatsTests(JournalCase):
                 "  gap = stated - actual; positive means overconfident",
                 "",
                 "Estimates (n=5): median actual/estimate 1.50x (you run over)",
-                "  Range hit: 2 of 4 = 50% (an 80% range should hit about 80%)",
+                "  Range hit: 2 of 4 = 50% (an 80% range should hit about 80%)  (n<5)",
                 "",
                 "By tag:",
                 "  api: claims n=7 stated 67% actual 57% gap +10",
@@ -385,6 +385,70 @@ class StatsTests(JournalCase):
         code, out, _ = self.run_cli("stats", "--tag", "nope")
         self.assertIn("0 graded", out)
         self.assertIn("Too few graded entries", out)
+
+
+class RangeHitSampleTests(JournalCase):
+    def test_range_hit_not_marked_with_five_ranges(self):
+        for _ in range(5):
+            e = self.estimate("e", 2, range_low=1, range_high=3)
+            journal.grade_entry(self.path, e["id"], actual=2)
+        line = next(l for l in journal.format_stats(
+            journal.compute_stats(self.read())).splitlines() if "Range hit" in l)
+        self.assertEqual(line, "  Range hit: 5 of 5 = 100% (an 80% range should hit about 80%)")
+
+
+class HandEditedEntryTests(JournalCase):
+    CLAIM = {"id": 2, "created": "2026-10-01", "type": "claim", "text": "x", "confidence": 70,
+             "know_by": None, "tags": [], "project": "p", "status": "open"}
+    EST = {"id": 2, "created": "2026-10-01", "type": "estimate", "text": "x", "unit": "hours",
+           "estimate": 2, "range_low": None, "range_high": None, "know_by": None, "tags": [],
+           "project": "p", "status": "open"}
+
+    def variants(self):
+        c, e = self.CLAIM, self.EST
+        return {
+            "estimate zero": {**e, "estimate": 0},
+            "estimate string": {**e, "estimate": "2"},
+            "estimate nan": {**e, "estimate": float("nan")},
+            "unit not text": {**e, "unit": 5},
+            "range one-sided": {**e, "range_low": 1, "range_high": None},
+            "range as text": {**e, "range_low": "1", "range_high": 3},
+            "confidence string": {**c, "confidence": "70"},
+            "confidence too high": {**c, "confidence": 150},
+            "confidence too low": {**c, "confidence": 30},
+            "confidence bool": {**c, "confidence": True},
+            "tags null": {**c, "tags": None},
+            "tags string": {**c, "tags": "perf"},
+            "tags mixed": {**c, "tags": ["a", 5]},
+            "know_by int": {**c, "know_by": 5},
+            "bool id": {**c, "id": True},
+            "graded claim without outcome": {**c, "status": "graded"},
+            "graded claim bad outcome": {**c, "status": "graded", "outcome": "maybe"},
+            "graded estimate without actual": {**e, "status": "graded"},
+            "graded estimate text actual": {**e, "status": "graded", "actual": "3"},
+            "graded estimate negative actual": {**e, "status": "graded", "actual": -1},
+        }
+
+    def test_bad_shape_entries_are_malformed_not_crashes(self):
+        good = self.claim("ok", 70)
+        for name, bad in self.variants().items():
+            with self.subTest(name):
+                self.path.write_text(json.dumps(good) + "\n" + json.dumps(bad) + "\n", encoding="utf-8")
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err):
+                    slots = journal.load(self.path)
+                self.assertEqual([kind for kind, _ in slots], ["entry", "raw"])
+                self.assertIn("malformed line 2", err.getvalue())
+                for cmd in (("stats",), ("stats", "--tag", "perf"), ("list",), ("list", "--due")):
+                    code, _, _ = self.run_cli(*cmd)
+                    self.assertEqual(code, 0, (name, cmd))
+
+    def test_entry_without_optional_keys_is_still_valid(self):
+        slim = {k: v for k, v in self.CLAIM.items() if k not in ("tags", "know_by", "project")}
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text(json.dumps(slim) + "\n", encoding="utf-8")
+        self.assertEqual(len(journal.entries_of(journal.load(self.path))), 1)
+        self.assertEqual(self.run_cli("stats")[0], 0)
 
 
 if __name__ == "__main__":
