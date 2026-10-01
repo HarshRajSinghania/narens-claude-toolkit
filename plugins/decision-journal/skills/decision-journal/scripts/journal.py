@@ -625,7 +625,7 @@ def main(argv=None):
         print(f"error: {exc}", file=sys.stderr)
         return 1
     except OSError as exc:
-        target = exc.filename or path
+        target = exc.filename2 or exc.filename or path  # filename2 is the log when a temp-file swap fails
         print(f"error: cannot read or write {target}: {exc.strerror or exc}", file=sys.stderr)
         return 2
     return 0

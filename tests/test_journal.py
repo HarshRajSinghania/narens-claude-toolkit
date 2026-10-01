@@ -729,14 +729,16 @@ class RoundTwoMinorTests(JournalCase):
         self.assertIn("5 graded", out)
 
     def test_os_error_names_the_file_that_failed(self):
-        failure = PermissionError(13, "Access is denied", "C:/some/other.tmp")
+        # os.replace(tmp, log) failing: filename is the temp file, filename2 the destination log
+        failure = PermissionError(13, "Access is denied", "C:/x/.journal-1.tmp", None, "C:/the/log.jsonl")
         with mock.patch("journal.os.replace", side_effect=failure):
             code, _, err = self.run_cli("add", "--type", "claim", "--text", "x", "--confidence", "70")
         self.assertEqual(code, 2)
-        self.assertIn("C:/some/other.tmp", err)
-        self.assertNotIn(str(self.path), err)
+        self.assertIn("C:/the/log.jsonl", err)
+        self.assertNotIn(".journal-1.tmp", err)
         with mock.patch("journal.os.replace", side_effect=OSError("disk full")):
             code, _, err = self.run_cli("add", "--type", "claim", "--text", "x", "--confidence", "70")
+        self.assertEqual(code, 2)
         self.assertIn(str(self.path), err)  # no filename on the error: name the log
 
     def test_estimate_with_confidence_reports_the_real_mistake(self):
