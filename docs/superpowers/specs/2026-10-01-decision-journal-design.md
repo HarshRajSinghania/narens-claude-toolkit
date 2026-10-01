@@ -45,7 +45,7 @@ Safety:
 - All writes are atomic: write a temp file in the same directory, then `os.replace`.
 - A malformed line (invalid JSON or missing required fields) is skipped with a warning on stderr when reading, and is preserved byte-for-byte when the file is rewritten. It is never dropped.
 - Reads tolerate CRLF line endings and a UTF-8 BOM.
-- Known limitation: two sessions writing at the same instant are last-writer-wins.
+- Concurrent commands take a lock file next to the log (cleared if it is older than 30 seconds), so simultaneous writes do not lose entries. Known limitation: two commands that both clear the same stale lock at the same instant can both proceed, which can lose one entry (the file stays valid).
 
 ## Scoring (`stats`)
 

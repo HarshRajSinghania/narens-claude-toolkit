@@ -7,7 +7,7 @@ All notable changes are recorded here. Format follows [Keep a Changelog](https:/
 ## [0.1.2] - 2026-10-01
 
 ### Fixed
-- `decision-journal` 0.1.2: `--confidence 1` explains it was read as 100%; `stats --tag` matches entries logged by 0.1.0 (tags are casefolded when compared); the OS error names the file that actually failed; an estimate given `--confidence` reports the real mistake; a missing subcommand lists the commands; `grade`'s `result` line is documented as success-only; symlinked logs are written through the link (covered by a test that only runs where symlinks are allowed); `grade`'s result line prints whole numbers from older logs as `3`, not `3.0`.
+- `decision-journal` 0.1.2: `--confidence 1` explains it was read as 100%; `stats --tag` matches entries logged by 0.1.0 (tags are casefolded when compared); the OS error names the file that actually failed; an estimate given `--confidence` reports the real mistake; a missing subcommand lists the commands; `grade`'s `result` line is documented as success-only; `grade`'s result line prints whole numbers from older logs as `3`, not `3.0`.
 
 ## [0.1.1] - 2026-10-01
 
