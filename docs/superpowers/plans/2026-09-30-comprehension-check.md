@@ -437,7 +437,7 @@ At the end you get a summary:
 | Retry and lost-job path | couldn't maintain | `queue.py:30-38` |
 | Lock usage on `put` / `_pop` | solid | `queue.py:14-21` |
 
-with a suggested next step for each flagged part, such as "add a test for a job that fails on its last attempt".
+with a suggested next step for each flagged part, such as "add a test for a job that fails on its first attempt".
 
 ## How it works
 

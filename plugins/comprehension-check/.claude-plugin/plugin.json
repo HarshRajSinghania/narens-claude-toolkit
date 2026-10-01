@@ -1,6 +1,6 @@
 {
   "name": "comprehension-check",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Use when the user asks to be quizzed on, or to check their understanding of, code Claude wrote this session (for example 'quiz me on that' or 'do I actually understand this change?').",
   "author": {
     "name": "Naren",
@@ -9,5 +9,9 @@
   "homepage": "https://github.com/NarenDawar/narens-claude-skills/tree/main/plugins/comprehension-check",
   "repository": "https://github.com/NarenDawar/narens-claude-skills",
   "license": "MIT",
-  "keywords": ["claude-code", "claude-skills", "agent-skills"]
+  "keywords": [
+    "claude-code",
+    "claude-skills",
+    "agent-skills"
+  ]
 }

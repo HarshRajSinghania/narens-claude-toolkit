@@ -16,7 +16,7 @@ Only when you ask. Example phrasings:
 - "Do I actually understand what you just wrote?"
 - "Check my understanding of the retry logic."
 
-It never starts on its own.
+You can also run it directly with `/comprehension-check:comprehension-check`. It never starts on its own.
 
 ## Install
 
@@ -35,18 +35,18 @@ Copy `plugins/comprehension-check/skills/comprehension-check` into `~/.claude/sk
 
 After Claude adds worker threads to a retry queue, you say: "Quiz me on that."
 
-**Claude:** If `handler(job)` raises on a job's first attempt while the other workers have already returned, what state is that job in when `run()` returns? (`queue.py:35`)
+**Claude:** If `handler(job)` raises on a job's first attempt, what state is that job in when `run()` returns? (`queue.py:35`)
 
 **You:** It retries 3 times, then goes to `dead`.
 
-**Claude:** Partly right. It does go to `dead` after 3 failures, if it gets that far. What you missed: the retry is scheduled by a `threading.Timer` that fires after the workers have exited, so when `run()` returns the job is neither retried nor in `dead` (`queue.py:30-38`). Next question...
+**Claude:** Partly right. It does go to `dead` after 3 failures, if it gets that far. What you missed: the retry is scheduled by a `threading.Timer`, and `run()` only joins the worker threads, so it can return before the timer fires and the job is neither retried nor in `dead` (`queue.py:30-38`). Next question...
 
 At the end you get a summary:
 
 | Topic | Verdict | Where |
 | --- | --- | --- |
 | Retry and lost-job path | couldn't maintain | `queue.py:30-38` |
-| Lock usage on `put` / `_pop` | solid | `queue.py:14-21` |
+| Lock usage on `put` / `_pop` | solid | `queue.py:13-19` |
 
 with a suggested next step for each flagged part, such as "add a test for a job that fails on its first attempt".
 

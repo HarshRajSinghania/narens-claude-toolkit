@@ -24,8 +24,8 @@ If a command prints an error, tell the user in one sentence what was wrong and a
 ## Log a prediction
 
 1. Decide the type. A yes/no judgment ("won't scale") is a claim; a number ("2 hours") is an estimate.
-2. Ask only for what is missing: confidence (a whole number from 50 to 99) for a claim; a number and a unit for an estimate. Do not ask for things the user already gave.
-3. Once the required fields are known, ask one short line offering the optional extras: an 80% range (estimates), a know-by date, a tag. The user can say "log it" to skip them. Do not run `add` before this, because entries cannot be edited later.
+2. Ask only for what is missing: confidence (a whole number from 50 to 99; 70, 70% and 0.7 all mean 70) for a claim; a number and a unit for an estimate. Do not ask for things the user already gave.
+3. Once the required fields are known, ask one short line offering the optional extras: an 80% range (estimates), a know-by date, a tag. The user can say "log it" to skip them. Do not run `add` before this, because the script has no edit command, so the extras cannot be added afterwards.
 4. Run `add`, then confirm in one line with the id.
 5. Never argue the user out of their number. If they ask what you think, give your own view separately and say it was not logged; log only theirs.
 
@@ -35,7 +35,7 @@ If a command prints an error, tell the user in one sentence what was wrong and a
 2. One entry at a time: restate the prediction and the user's number, and ask what actually happened.
 3. Record only what the user tells you in answer to that question. If you saw something in the session that hints at the outcome, mention it and ask them to confirm; never record an outcome from your own inference.
 4. If the outcome is ambiguous (partly true, or the claim's wording does not clearly apply), ask one clarifying question before recording.
-5. Run `grade`, then show a one-line result: "70% claim: it happened" or "2 hours estimated, 3.5 actual: 1.75x".
+5. Run `grade`, then show its `result` line (for example "70% claim: it happened" or "2 hours estimated, 3.5 actual: 1.75x"). Never work out the ratio yourself.
 6. If `grade` says the entry is already graded, ask whether to overwrite it; use `--force` only after they say yes.
 
 ## Review calibration
@@ -47,7 +47,7 @@ If a command prints an error, tell the user in one sentence what was wrong and a
 
 ## Edits and deletes
 
-There is no edit or delete command. If the user wants to fix or remove an entry, say so and give the log path (a plain file, one JSON object per line). Never change the file in the same turn as the request: first show which entry you think they mean (id and text; "last" is ambiguous, so say which one you picked) and ask them to confirm. Only after they confirm, make the change yourself, keeping one JSON object per line, and tell them what changed.
+There is no edit or delete command. If the user wants to fix or remove an entry, say so and give the log path (the value of `DECISION_JOURNAL_PATH` if it is set, otherwise `~/.claude/decision-journal.jsonl`; a plain file, one JSON object per line). Never change the file in the same turn as the request: first show which entry you think they mean (id and text; "last" is ambiguous, so say which one you picked) and ask them to confirm. Only after they confirm, make the change yourself, keeping one JSON object per line, and tell them what changed.
 
 ## Tone
 

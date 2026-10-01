@@ -55,11 +55,21 @@ Weeks later:
 And once you have enough graded entries:
 
 ```text
+Decision journal: 18 graded (13 claims, 5 estimates)
+
 Claims (n=13): Brier 0.247
+  60-69  n=2  stated 60%  actual 50%  gap +10  (n<5)
   70-79  n=5  stated 70%  actual 60%  gap +10
   80-89  n=6  stated 80%  actual 67%  gap +13
+  gap = stated - actual; positive means overconfident
+
 Estimates (n=5): median actual/estimate 1.50x (you run over)
   Range hit: 2 of 4 = 50% (an 80% range should hit about 80%)  (n<5)
+
+By tag:
+  api: claims n=7 stated 67% actual 57% gap +10
+  perf: claims n=6 stated 80% actual 67% gap +13
+  refactor: estimates n=5 median 1.50x
 ```
 
 With fewer than 5 graded entries, or a slice smaller than 5, it says there is not enough data instead of inventing a pattern.
@@ -72,7 +82,7 @@ With fewer than 5 graded entries, or a slice smaller than 5, it says there is no
 
 ## Where your data lives
 
-One private file: `~/.claude/decision-journal.jsonl`, one JSON entry per line, shared across all your projects and never committed to a repo. To reset, delete the file. To fix a typo, ask Claude (it will show which entry it means and ask you to confirm before changing anything) or edit the file by hand; there is no edit or delete command yet. Set `DECISION_JOURNAL_PATH` to use a different file.
+One private file: `~/.claude/decision-journal.jsonl`, one JSON entry per line, shared across all your projects and never committed to a repo. To reset, delete the file. Ids are one more than the highest id in the file, so if you delete the newest entry by hand its id will be reused. Several Claude sessions can write at once: each command takes a short lock file next to the log (`decision-journal.jsonl.lock`, cleared automatically if it goes stale). To fix a typo, ask Claude (it will show which entry it means and ask you to confirm before changing anything) or edit the file by hand; there is no edit or delete command yet. Set `DECISION_JOURNAL_PATH` to use a different file.
 
 ---
 
