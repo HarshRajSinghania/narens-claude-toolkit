@@ -37,6 +37,10 @@ The spec's scenario table covers the main flows. These input classes are implied
 
 ---
 
+## Execution notes
+
+- **Fixture ruling (Task 1):** the planned race (re-appended job lost because workers exit) does not reproduce: the failing worker re-appends and then pops the job itself (0 lost in 400 runs). Replaced with a timer-scheduled retry that fires after `run()` has returned (100/100 runs lose the job). Scenario text and README example updated to match.
+
 ## Scenario catalogue (used by Tasks 1 and 3)
 
 Every scenario is one prompt to a fresh general-purpose subagent (`model: sonnet`). The prompt is built from this template; "SKILL" is the full text of `SKILL.md` for with-skill runs and is omitted for baseline runs.
@@ -60,7 +64,7 @@ Write ONLY your next message to the user, exactly as you would send it. Do not d
 | S3 | `fx-clean` | `User: Quiz me on what you changed.` | Says nothing changed this session (or nothing meaningful) and stops. No questions. |
 | S4 | `fx-queue` | `User: quiz me` / `Claude: <Q1 about what state a job is in if the handler fails on its last attempt while other workers have already exited>` / `User: idk` | Treats it as a valid answer, states the actual behavior with a `queue.py` line pointer, marks the topic as a gap. No lecture beyond that, no scolding. May then ask the next question or the summary. |
 | S5 | `fx-queue` | `User: quiz me` / `Claude: <Q1 as in S4>` / `User: just give me the answers` | Asks for one attempt first (or offers a hint). Does NOT dump the full answer in this message. |
-| S6 | `fx-queue` | `User: quiz me` / `Claude: <Q1 as in S4>` / `User: It retries up to 3 times and if it still fails the job goes into self.dead.` | Reads the code, then says the answer is partly right but MISSES that a failed job can be silently lost: other workers may already have exited when the retry is appended, so it is neither retried nor in `dead`. Cites `queue.py`. |
+| S6 | `fx-queue` | `User: quiz me` / `Claude: <Q1 as in S4>` / `User: It retries up to 3 times and if it still fails the job goes into self.dead.` | Reads the code, then says the answer is partly right but MISSES that a failed job can be silently lost: its retry is scheduled by a `threading.Timer` and only appended after the workers have exited, so when `run()` returns it is neither retried nor in `dead`. Cites `queue.py`. |
 | S7 | `fx-nogit` | `User: Quiz me on the code you wrote today. (Claude created queue.py this session; there is no git repo.)` | Still scopes to `queue.py`, asks one failure-mode question. Does not refuse because git is missing. |
 | S8 | `fx-mixed` | `User: Quiz me on your changes. (Claude edited only queue.py this session. The user edited README.md themselves.)` | Question is about `queue.py`, not README.md. |
 | S9 | `fx-huge` | `User: Quiz me on that big change.` | Asks ONE question now (one at a time), about `queue.py` risk, and does not announce more than 5 total. Does not walk the 60 trivial files. |
@@ -213,7 +217,7 @@ Expected: a number greater than 0, which proves the lost-job race exists. If it 
 
 For each of S1, S2, S4, S5, dispatch one general-purpose subagent with `model: sonnet`, using the template in the scenario catalogue with the skill block omitted, the fixture path from the table (`$FX/<fixture>`), and the transcript from the table. For S4 and S5 the Claude question in the transcript is:
 
-`Claude: If handler(job) raises on a job's last attempt while the other three workers have already returned because the queue looked empty, what state is that job left in?`
+`Claude: If handler(job) raises on a job's first attempt while the other three workers have already returned because the queue looked empty, what state is that job in when run() returns?`
 
 Save each agent's returned message verbatim under its scenario ID in `$SP/baseline.md`.
 
@@ -283,7 +287,7 @@ Do not use it for study topics or for code Claude did not change this session. D
 
 Ask about failure modes and behavior, not about what code says.
 
-- Good: "If `handler(job)` raises on the last attempt while the other workers have already returned, what state is that job left in? (`queue.py:30`)"
+- Good: "If `handler(job)` raises on its first attempt while the other workers have already returned, what state is that job in when `run()` returns? (`queue.py:35`)"
 - Good: "What happens if `put()` is called while `run()` is draining the queue?"
 - Bad: "What does `run()` do?" (recitation)
 - Bad: "Isn't it risky that the append is unlocked?" (leaks the answer)
@@ -420,17 +424,17 @@ Copy `plugins/comprehension-check/skills/comprehension-check` into `~/.claude/sk
 
 After Claude adds worker threads to a retry queue, you say: "Quiz me on that."
 
-**Claude:** If `handler(job)` raises on a job's last attempt while the other workers have already returned, what state is that job left in? (`queue.py:30`)
+**Claude:** If `handler(job)` raises on a job's first attempt while the other workers have already returned, what state is that job in when `run()` returns? (`queue.py:35`)
 
 **You:** It retries 3 times, then goes to `dead`.
 
-**Claude:** Partly right. It does go to `dead` after 3 failures. What you missed: a failed job is appended to `items` after the other workers may have exited, so it is neither retried nor in `dead`, and `run()` returns without it (`queue.py:27-33`). Next question...
+**Claude:** Partly right. It does go to `dead` after 3 failures, if it gets that far. What you missed: the retry is scheduled by a `threading.Timer` that fires after the workers have exited, so when `run()` returns the job is neither retried nor in `dead` (`queue.py:30-38`). Next question...
 
 At the end you get a summary:
 
 | Topic | Verdict | Where |
 | --- | --- | --- |
-| Retry and lost-job path | couldn't maintain | `queue.py:27-33` |
+| Retry and lost-job path | couldn't maintain | `queue.py:30-38` |
 | Lock usage on `put` / `_pop` | solid | `queue.py:14-21` |
 
 with a suggested next step for each flagged part, such as "add a test for a job that fails on its last attempt".
