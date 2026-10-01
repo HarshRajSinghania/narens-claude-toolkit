@@ -416,5 +416,160 @@ class StopCheckTests(RuleCase):
             self.assertIsNotNone(self.hit(rule, stop()))
 
 
+class MainCase(RuleCase):
+    def write_rules(self, rules):
+        path = Path(self.project, ".claude", "rules.json")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"version": 1, "rules": rules}), encoding="utf-8")
+        return path
+
+    def run_main(self, argv, stdin_text=""):
+        out, err = io.StringIO(), io.StringIO()
+        fake_stdin = types.SimpleNamespace(buffer=io.BytesIO(stdin_text.encode("utf-8")))
+        with mock.patch("sys.stdin", fake_stdin), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = rule_hook.main(argv)
+        return code, out.getvalue(), err.getvalue()
+
+    def migration_rule(self, **fields):
+        rule = make_rule(
+            "protected_path", id="no-migration-edits", source="CLAUDE.md:14",
+            message="Create a new migration instead.", globs=["**/migrations/**"],
+            proof={"violation": pre("Edit", file_path="app/migrations/0001.py"),
+                   "pass": pre("Edit", file_path="app/models.py")},
+        )
+        rule.update(fields)
+        return rule
+
+
+class CheckTests(MainCase):
+    def test_allow_prints_nothing(self):
+        self.write_rules([self.migration_rule()])
+        code, out, err = self.run_main(["check"], json.dumps(pre("Edit", file_path="app/models.py")))
+        self.assertEqual((code, out, err), (0, "", ""))
+
+    def test_pretool_violation_denies_with_the_rule_reason(self):
+        self.write_rules([self.migration_rule()])
+        code, out, _ = self.run_main(["check"], json.dumps(pre("Write", file_path="app/migrations/9.py", content="x")))
+        self.assertEqual(code, 0)
+        body = json.loads(out)["hookSpecificOutput"]
+        self.assertEqual(body["hookEventName"], "PreToolUse")
+        self.assertEqual(body["permissionDecision"], "deny")
+        self.assertEqual(
+            body["permissionDecisionReason"],
+            "Rule no-migration-edits: Create a new migration instead. (from CLAUDE.md:14)",
+        )
+
+    def test_stop_violation_blocks(self):
+        rule = make_rule("stop_check", id="tests-pass", message="Fix the tests first.",
+                         command=py("import sys; sys.exit(1)"),
+                         proof={"violation": stop(simulate_exit=1), "pass": stop(simulate_exit=0)})
+        self.write_rules([rule])
+        code, out, _ = self.run_main(["check"], json.dumps(stop()))
+        body = json.loads(out)
+        self.assertEqual(code, 0)
+        self.assertEqual(body["decision"], "block")
+        self.assertIn("Rule tests-pass: Fix the tests first.", body["reason"])
+        # the loop guard
+        self.assertEqual(self.run_main(["check"], json.dumps(stop(stop_hook_active=True)))[1], "")
+
+    def test_first_violated_rule_wins_and_disabled_rules_are_ignored(self):
+        second = self.migration_rule(id="second-rule", message="second")
+        disabled = self.migration_rule(id="disabled-rule", message="disabled", enabled=False)
+        self.write_rules([disabled, self.migration_rule(), second])
+        _, out, _ = self.run_main(["check"], json.dumps(pre("Edit", file_path="app/migrations/1.py")))
+        self.assertIn("no-migration-edits", out)
+        self.assertNotIn("second-rule", out)
+        self.assertNotIn("disabled-rule", out)
+
+    def test_unknown_tools_and_events_are_allowed_silently(self):
+        self.write_rules([self.migration_rule()])
+        for payload in (pre("Read", file_path="app/migrations/1.py"), {"hook_event_name": "SessionStart"}):
+            self.assertEqual(self.run_main(["check"], json.dumps(payload))[:2], (0, ""))
+
+    def test_fail_open_on_bad_input_or_rules(self):
+        self.write_rules([self.migration_rule()])
+        for bad in ("not json", "[1, 2]", ""):
+            with self.subTest(stdin=bad):
+                code, out, err = self.run_main(["check"], bad)
+                self.assertEqual((code, out), (1, ""))
+                self.assertTrue(err.startswith("[rule_hook]"), err)
+        Path(self.project, ".claude", "rules.json").write_text("{broken", encoding="utf-8")
+        code, out, err = self.run_main(["check"], json.dumps(pre("Edit", file_path="a")))
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("[rule_hook]", err)
+
+    def test_missing_rules_file_warns_and_allows(self):
+        code, out, err = self.run_main(["check"], json.dumps(pre("Edit", file_path="a")))
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("rules.json", err)
+
+    def test_invalid_rules_are_a_warning_not_a_block(self):
+        self.write_rules([make_rule("protected_path", globs=[])])
+        code, out, err = self.run_main(["check"], json.dumps(pre("Edit", file_path="a")))
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("globs", err)
+
+    def test_real_captured_write_payload_is_denied(self):
+        rule = self.migration_rule(id="no-notes", globs=["notes.txt"], source="CLAUDE.md:3", message="Not notes.txt")
+        self.write_rules([rule])
+        text = (FIXTURES / "PreToolUse-Write.json").read_text(encoding="utf-8").replace(
+            "{PROJECT}", self.project.replace("\\", "\\\\"))
+        code, out, _ = self.run_main(["check"], text)
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["hookSpecificOutput"]["permissionDecision"], "deny")
+
+
+class SelftestTests(MainCase):
+    def test_all_proofs_pass(self):
+        self.write_rules([self.migration_rule()])
+        code, out, _ = self.run_main(["selftest"])
+        self.assertEqual(code, 0)
+        self.assertIn("PASS  no-migration-edits", out)
+
+    def test_a_failing_proof_fails_the_selftest(self):
+        wrong = self.migration_rule(proof={"violation": pre("Edit", file_path="app/models.py"),
+                                           "pass": pre("Edit", file_path="app/models.py")})
+        self.write_rules([wrong])
+        code, out, _ = self.run_main(["selftest"])
+        self.assertEqual(code, 1)
+        self.assertIn("FAIL  no-migration-edits", out)
+        self.assertIn("NOT blocked", out)
+
+    def test_a_pass_payload_that_blocks_also_fails(self):
+        wrong = self.migration_rule(proof={"violation": pre("Edit", file_path="app/migrations/1.py"),
+                                           "pass": pre("Edit", file_path="app/migrations/2.py")})
+        self.write_rules([wrong])
+        code, out, _ = self.run_main(["selftest"])
+        self.assertEqual(code, 1)
+        self.assertIn("BLOCKED", out)
+
+    def test_disabled_rules_are_skipped(self):
+        self.write_rules([self.migration_rule(enabled=False, proof={})])
+        code, out, _ = self.run_main(["selftest"])
+        self.assertEqual(code, 0)
+        self.assertIn("SKIP  no-migration-edits", out)
+
+    def test_invalid_rules_list_every_error(self):
+        self.write_rules([make_rule("protected_path", globs=[]), make_rule("mystery", id="other")])
+        code, out, _ = self.run_main(["selftest"])
+        self.assertEqual(code, 1)
+        self.assertIn("globs", out)
+        self.assertIn("type must be one of", out)
+
+    def test_rules_path_override_and_missing_file(self):
+        other = Path(self.project, "elsewhere.json")
+        other.write_text(json.dumps({"version": 1, "rules": [self.migration_rule()]}), encoding="utf-8")
+        self.assertEqual(self.run_main(["selftest", "--rules", str(other)])[0], 0)
+        code, out, _ = self.run_main(["selftest", "--rules", str(Path(self.project, "nope.json"))])
+        self.assertEqual(code, 1)
+        self.assertIn("not found", out)
+
+    def test_stop_check_proof_uses_simulate_exit(self):
+        rule = make_rule("stop_check", id="tests-pass", message="Fix tests.", command="exit 99",
+                         proof={"violation": stop(simulate_exit=1), "pass": stop(simulate_exit=0)})
+        self.write_rules([rule])
+        self.assertEqual(self.run_main(["selftest"])[0], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

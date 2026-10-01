@@ -304,3 +304,115 @@ def _stop_check(rule, payload, project, simulate):
         return None
     tail = "\n".join((done.stdout + done.stderr).splitlines()[-20:])[-2000:]
     return f"`{command}` exited {done.returncode}:\n{tail}"
+
+
+# --- evaluation, output, CLI ---------------------------------------------------------------
+
+def project_dir(payload):
+    return os.environ.get("CLAUDE_PROJECT_DIR") or payload.get("cwd") or os.getcwd()
+
+
+def load_rules(path):
+    path = Path(path)
+    if not path.is_file():
+        raise RulesError(f"rules file not found: {path}")
+    try:
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except ValueError as exc:
+        raise RulesError(f"{path} is not valid JSON ({exc})") from None
+    errors = validate_rules(data)
+    if errors:
+        raise RulesError("; ".join(errors))
+    return data["rules"]
+
+
+def evaluate(payload, rules, project, simulate=False):
+    """The first enabled rule that the payload violates, as (rule, detail), else None."""
+    for rule in rules:
+        if not rule.get("enabled", True):
+            continue
+        detail = check_rule(rule, payload, project, simulate)
+        if detail is not None:
+            return rule, detail
+    return None
+
+
+def decision(payload, rule, detail):
+    source = f" (from {rule['source']})" if rule.get("source") else ""
+    reason = f"Rule {rule['id']}: {rule['message']}{source}"
+    if payload.get("hook_event_name") == "Stop":
+        return {"decision": "block", "reason": f"{reason}\n{detail}"}
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": reason,
+        }
+    }
+
+
+def run_check(stream):
+    raw = stream.read()
+    text = raw.decode("utf-8-sig") if isinstance(raw, bytes) else raw
+    payload = json.loads(text)
+    if not isinstance(payload, dict):
+        raise ValueError("the hook payload must be a JSON object")
+    project = project_dir(payload)
+    rules = load_rules(Path(project) / ".claude" / "rules.json")
+    hit = evaluate(payload, rules, project)
+    if hit:
+        print(json.dumps(decision(payload, *hit)))
+    return 0
+
+
+def run_selftest(rules_path=None):
+    project = project_dir({})
+    path = Path(rules_path) if rules_path else Path(project) / ".claude" / "rules.json"
+    try:
+        rules = load_rules(path)
+    except RulesError as exc:
+        for problem in str(exc).split("; "):
+            print(f"INVALID  {problem}")
+        return 1
+    failed = 0
+    for rule in rules:
+        if not rule.get("enabled", True):
+            print(f"SKIP  {rule['id']} (disabled)")
+            continue
+        proof = rule["proof"]
+        blocked = evaluate(proof["violation"], [rule], project, simulate=True)
+        allowed = evaluate(proof["pass"], [rule], project, simulate=True) is None
+        if blocked is not None and allowed:
+            print(f"PASS  {rule['id']}")
+        else:
+            failed += 1
+            print(
+                f"FAIL  {rule['id']} (violation {'blocked' if blocked else 'NOT blocked'}, "
+                f"pass {'allowed' if allowed else 'BLOCKED'})"
+            )
+    return 1 if failed else 0
+
+
+def main(argv=None):
+    import argparse
+
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
+    parser = argparse.ArgumentParser(prog="rule_hook.py")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("check", help="hook entry point (payload on stdin)")
+    selftest = sub.add_parser("selftest", help="prove every rule blocks its violation and allows its pass")
+    selftest.add_argument("--rules", help="path to rules.json (default: <project>/.claude/rules.json)")
+    args = parser.parse_args(argv)
+    try:
+        if args.cmd == "check":
+            return run_check(sys.stdin.buffer)
+        return run_selftest(args.rules)
+    except Exception as exc:  # noqa: BLE001 - fail open: a broken engine must not block every tool call
+        print(f"[rule_hook] {exc}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
