@@ -7,3 +7,4 @@ All notable changes are recorded here. Format follows [Keep a Changelog](https:/
 ### Added
 - Repo scaffolding: plugin marketplace, skill template, validator, catalog generator, CI.
 - `comprehension-check` skill: quizzes you on the code Claude wrote this session and flags the parts you could not maintain.
+- `decision-journal` skill: log predictions about dev decisions, grade them later, and see where you are overconfident (JSONL log plus a standard-library calibration script).

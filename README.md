@@ -31,6 +31,7 @@ Copy any `plugins/<skill-name>/skills/<skill-name>/` folder into `~/.claude/skil
 | Skill | What it does | Install |
 | --- | --- | --- |
 | [`comprehension-check`](plugins/comprehension-check/README.md) | Use when the user asks to be quizzed on, or to check their understanding of, code Claude wrote this session (for example 'quiz me on that' or 'do I actually understand this change?'). | `/plugin install comprehension-check@narens-claude-skills` |
+| [`decision-journal`](plugins/decision-journal/README.md) | Use when the user wants to log a prediction or estimate about a dev or project decision, grade past predictions, or see how calibrated they are (for example 'log a prediction', 'grade my predictions', 'how calibrated am I?'). | `/plugin install decision-journal@narens-claude-skills` |
 <!-- CATALOG:END -->
 
 ## Why these skills
