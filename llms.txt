@@ -1,0 +1,7 @@
+# Naren's Claude Skills
+
+> Original Claude Code skills and plugins by Naren. Install through the plugin marketplace `NarenDawar/narens-claude-skills`.
+
+## Skills
+
+- Coming soon.

@@ -1,0 +1,12 @@
+{
+  "name": "narens-claude-skills",
+  "owner": {
+    "name": "Naren",
+    "url": "https://github.com/NarenDawar"
+  },
+  "metadata": {
+    "description": "Naren's Claude skills: unique, installable Agent Skills and Claude Code plugins.",
+    "version": "0.1.0"
+  },
+  "plugins": []
+}
