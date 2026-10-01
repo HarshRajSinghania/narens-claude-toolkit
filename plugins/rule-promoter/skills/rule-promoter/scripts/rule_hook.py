@@ -216,8 +216,49 @@ def check_rule(rule, payload, project, simulate=False):
     return None
 
 
+def split_segments(command):
+    """Split a shell command into segments on &&, ||, ;, |, & and newlines (quotes respected)."""
+    segments, buf, quote, i = [], [], None, 0
+    while i < len(command):
+        ch = command[i]
+        if quote:
+            buf.append(ch)
+            if ch == "\\" and quote == '"' and i + 1 < len(command):
+                buf.append(command[i + 1])
+                i += 1
+            elif ch == quote:
+                quote = None
+        elif ch == "\\" and i + 1 < len(command):
+            buf.append(ch)
+            buf.append(command[i + 1])
+            i += 1
+        elif ch in "\"'":
+            quote = ch
+            buf.append(ch)
+        elif command.startswith(("&&", "||"), i):
+            segments.append("".join(buf))
+            buf = []
+            i += 1
+        elif ch in ";|&\n":
+            segments.append("".join(buf))
+            buf = []
+        else:
+            buf.append(ch)
+        i += 1
+    segments.append("".join(buf))
+    return [s.strip() for s in segments if s.strip()]
+
+
 def _blocked_command(rule, tool, tool_input):
-    return None  # implemented in Task 3
+    if tool != "Bash":
+        return None
+    command = tool_input.get("command")
+    if not isinstance(command, str):
+        return None
+    for segment in split_segments(command):
+        if _matches_any(rule["patterns"], segment) and not _matches_any(rule.get("except_patterns", []), segment):
+            return f"command: {segment}"
+    return None
 
 
 def _stop_check(rule, payload, project, simulate):

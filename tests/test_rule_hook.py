@@ -285,5 +285,67 @@ class RealPayloadTests(RuleCase):
         self.assertEqual(payload["hook_event_name"], "Stop")
 
 
+class SplitSegmentsTests(unittest.TestCase):
+    def test_splits_on_operators(self):
+        self.assertEqual(rule_hook.split_segments("a && b || c; d | e & f\ng"), ["a", "b", "c", "d", "e", "f", "g"])
+
+    def test_quoted_operators_do_not_split(self):
+        self.assertEqual(rule_hook.split_segments('echo "a && b" && ls'), ['echo "a && b"', "ls"])
+        self.assertEqual(rule_hook.split_segments("echo 'x; y'"), ["echo 'x; y'"])
+        self.assertEqual(rule_hook.split_segments('echo "say \\"hi; there\\""'), ['echo "say \\"hi; there\\""'])
+
+    def test_escaped_operator_does_not_split(self):
+        self.assertEqual(rule_hook.split_segments("echo a\\;b"), ["echo a\\;b"])
+
+    def test_blank_and_whitespace(self):
+        self.assertEqual(rule_hook.split_segments("  "), [])
+        self.assertEqual(rule_hook.split_segments(" a ;; b "), ["a", "b"])
+
+
+class BlockedCommandTests(RuleCase):
+    FORCE = r"\bgit\s+push\b.*(?:--force\b|\s-f\b)"
+
+    def rule(self, **fields):
+        return make_rule("blocked_command", patterns=[self.FORCE],
+                         except_patterns=["--force-with-lease"], **fields)
+
+    def test_blocks_force_push_variants(self):
+        for command in ("git push --force origin main", "git push -f", "git push origin main --force"):
+            with self.subTest(command=command):
+                self.assertIsNotNone(self.hit(self.rule(), pre("Bash", command=command)))
+
+    def test_compound_command_is_caught(self):
+        self.assertIn("git push -f", self.hit(self.rule(), pre("Bash", command="cd app && git push -f")))
+        self.assertIsNotNone(self.hit(self.rule(), pre("Bash", command="make test; git push --force")))
+
+    def test_quoted_operators_do_not_split(self):
+        command = 'echo "a && git push --force"'
+        self.assertEqual(len(rule_hook.split_segments(command)), 1)
+        # documented over-block: the pattern is searched inside the quoted segment
+        self.assertIsNotNone(self.hit(self.rule(), pre("Bash", command=command)))
+        self.assertIsNotNone(self.hit(self.rule(), pre("Bash", command='bash -c "git push --force"')))
+
+    def test_except_patterns_allow(self):
+        self.assertIsNone(self.hit(self.rule(), pre("Bash", command="git push --force-with-lease")))
+
+    def test_safe_commands_pass(self):
+        for command in ("git status", "git push origin feature", "echo done", "git pull --force-with-lease"):
+            with self.subTest(command=command):
+                self.assertIsNone(self.hit(self.rule(), pre("Bash", command=command)))
+
+    def test_push_to_main_rule(self):
+        rule = make_rule("blocked_command", patterns=[r"\bgit\s+push\b.*\b(?:main|master)\b"])
+        self.assertIsNotNone(self.hit(rule, pre("Bash", command="git push origin main")))
+        # documented false positive: the word-boundary pattern also matches a branch named main-menu
+        self.assertIsNotNone(self.hit(rule, pre("Bash", command="git push origin feature/main-menu")))
+        self.assertIsNone(self.hit(rule, pre("Bash", command="git push origin feature")))
+
+    def test_only_bash_and_only_strings(self):
+        self.assertIsNone(self.hit(self.rule(), pre("Edit", file_path="a", new_string="git push --force")))
+        self.assertIsNone(self.hit(self.rule(), pre("Bash", command=["git", "push", "--force"])))
+        self.assertIsNone(self.hit(self.rule(), pre("Bash")))
+        self.assertIsNone(self.hit(self.rule(), stop()))
+
+
 if __name__ == "__main__":
     unittest.main()
