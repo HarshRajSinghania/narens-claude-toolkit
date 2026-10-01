@@ -27,10 +27,10 @@ Do not use it for study topics or for code Claude did not change this session. D
 
 Ask about failure modes and behavior, not about what code says.
 
-- Good: "If `handler(job)` raises on its first attempt while the other workers have already returned, what state is that job in when `run()` returns? (`queue.py:35`)"
-- Good: "What happens if `put()` is called while `run()` is draining the queue?"
-- Bad: "What does `run()` do?" (recitation)
-- Bad: "Isn't it risky that the append is unlocked?" (leaks the answer)
+- Good: "If `refresh_token()` fails after `session.save()` has already run, what does the next request see? (`auth.py:42`)"
+- Good: "What happens if two requests reach `apply_discount()` at the same time?"
+- Bad: "What does `apply_discount()` do?" (recitation)
+- Bad: "Isn't it risky that `save()` isn't wrapped in a transaction?" (leaks the answer)
 
 ## Handling Answers
 
