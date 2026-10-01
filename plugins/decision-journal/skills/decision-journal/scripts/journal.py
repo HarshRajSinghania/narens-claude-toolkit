@@ -14,6 +14,7 @@ import statistics
 import sys
 import tempfile
 import time
+import uuid
 from datetime import date
 from pathlib import Path
 
@@ -89,13 +90,24 @@ def _valid(entry):
     return not graded or (_is_number(entry.get("actual")) and entry["actual"] >= 0)
 
 
+def _retry_permission(action, tries=200, delay=0.01):
+    """Retry briefly on PermissionError: on Windows another process may hold the file for a moment."""
+    for attempt in range(tries):
+        try:
+            return action()
+        except PermissionError:
+            if attempt == tries - 1:
+                raise
+            time.sleep(delay)
+
+
 def _load_numbered(path):
     """Read the log as (kind, value, line_number): kind is "entry" or "raw" (kept verbatim)."""
     path = Path(path)
     if not path.exists():
         return []
     try:
-        text = path.read_text(encoding="utf-8-sig")
+        text = _retry_permission(lambda: path.read_text(encoding="utf-8-sig"))
     except UnicodeDecodeError:
         raise JournalError(f"{path} is not valid UTF-8") from None
     slots = []
@@ -133,7 +145,7 @@ def save(path, slots):
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
             f.write(data)
-        os.replace(tmp, path)
+        _retry_permission(lambda: os.replace(tmp, path))
     except BaseException:
         try:
             os.unlink(tmp)
@@ -144,25 +156,41 @@ def save(path, slots):
 
 @contextlib.contextmanager
 def _locked(path, wait=5.0, stale=30.0):
-    """Hold a lock file next to the log so concurrent commands cannot lose updates."""
+    """Hold a lock file next to the log so concurrent commands cannot lose updates.
+
+    The lock file holds a token; only its owner removes it. A lock older than `stale`
+    seconds (a crashed command) is cleared. If the lock file cannot be created at all
+    (for example a read-only directory) this raises PermissionError after about a second.
+    """
     path = Path(os.path.realpath(path))
     path.parent.mkdir(parents=True, exist_ok=True)
     lock = path.with_name(path.name + ".lock")
-    deadline = time.monotonic() + wait
+    token = f"{os.getpid()}-{uuid.uuid4().hex}"
+    started = time.monotonic()
+    deadline = started + wait
+    cannot_create_deadline = started + min(1.0, wait)
     while True:
         try:
-            os.close(os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            try:
+                os.write(fd, token.encode("ascii"))
+            finally:
+                os.close(fd)
             break
-        except (FileExistsError, PermissionError):
+        except (FileExistsError, PermissionError) as exc:
+            lock_exists = True
             try:
                 if time.time() - lock.stat().st_mtime > stale:
                     lock.unlink()
                     continue
             except FileNotFoundError:
-                continue
+                lock_exists = False
             except OSError:
                 pass
-            if time.monotonic() >= deadline:
+            now = time.monotonic()
+            if isinstance(exc, PermissionError) and not lock_exists and now >= cannot_create_deadline:
+                raise
+            if now >= deadline:
                 raise JournalError(
                     f"could not lock {path}; if no other journal command is running, delete {lock}"
                 ) from None
@@ -171,8 +199,9 @@ def _locked(path, wait=5.0, stale=30.0):
         yield
     finally:
         try:
-            lock.unlink()
-        except FileNotFoundError:
+            if lock.read_text(encoding="ascii") == token:
+                lock.unlink()
+        except OSError:
             pass
 
 
@@ -360,8 +389,16 @@ def grade_entry(path, entry_id, *, outcome=None, actual=None, note=None, force=F
     return entry
 
 
+def _num_text(value):
+    return str(value) if isinstance(value, int) else repr(value)
+
+
 def _ratio_text(ratio):
-    return ">1000x" if ratio > 1000 else f"{ratio:.2f}x"
+    if ratio > 1000:
+        return ">1000x"
+    if 0 < ratio < 0.01:
+        return "<0.01x"
+    return f"{ratio:.2f}x"
 
 
 def grade_result(entry):
@@ -370,8 +407,8 @@ def grade_result(entry):
         happened = "it happened" if entry.get("outcome") == "yes" else "it did not happen"
         return f"{entry['confidence']}% claim: {happened}"
     ratio = entry["actual"] / entry["estimate"]
-    return (f"{entry['estimate']:g} {entry['unit']} estimated, "
-            f"{entry['actual']:g} actual: {_ratio_text(ratio)}")
+    return (f"{_num_text(entry['estimate'])} {entry['unit']} estimated, "
+            f"{_num_text(entry['actual'])} actual: {_ratio_text(ratio)}")
 
 
 MIN_N = 5

@@ -625,5 +625,85 @@ class DeferredMinorTests(JournalCase):
         self.assertEqual(len(real.read_text(encoding="utf-8").splitlines()), 1)
 
 
+class ReviewFixTests(JournalCase):
+    def test_unwritable_directory_fails_fast_not_forever(self):
+        real_open = os.open
+
+        def deny(path, *args, **kwargs):
+            if str(path).endswith(".lock"):
+                raise PermissionError(13, "denied")
+            return real_open(path, *args, **kwargs)
+
+        outcome = {}
+
+        def attempt():
+            try:
+                with journal._locked(self.path, wait=0.3):
+                    outcome["ok"] = True
+            except BaseException as exc:  # noqa: BLE001 - recorded and asserted below
+                outcome["exc"] = exc
+
+        with mock.patch("journal.os.open", side_effect=deny):
+            worker = threading.Thread(target=attempt, daemon=True)
+            worker.start()
+            worker.join(5)
+            self.assertFalse(worker.is_alive(), "lock acquisition never gave up")
+            self.assertIsInstance(outcome.get("exc"), PermissionError)
+            code, _, err = self.run_cli("add", "--type", "claim", "--text", "x", "--confidence", "70")
+        self.assertEqual(code, 2)
+        self.assertIn("cannot read or write", err)
+
+    def test_readers_and_writers_do_not_collide(self):
+        errors = []
+        stop = threading.Event()
+
+        def writer(i):
+            try:
+                for j in range(15):
+                    journal.add_entry(
+                        self.path, type="claim", text=f"c{i}-{j}", confidence=70, project="p"
+                    )
+            except Exception as exc:  # noqa: BLE001
+                errors.append(("write", exc))
+
+        def reader():
+            try:
+                while not stop.is_set():
+                    journal.list_entries(self.path)
+            except Exception as exc:  # noqa: BLE001
+                errors.append(("read", exc))
+
+        readers = [threading.Thread(target=reader) for _ in range(2)]
+        writers = [threading.Thread(target=writer, args=(i,)) for i in range(4)]
+        for t in readers + writers:
+            t.start()
+        for t in writers:
+            t.join()
+        stop.set()
+        for t in readers:
+            t.join()
+        self.assertEqual(errors, [])
+        self.assertEqual(len(self.read()), 60)
+
+    def test_lock_release_leaves_a_lock_someone_else_took(self):
+        lock = self.path.with_name(self.path.name + ".lock")
+        with journal._locked(self.path):
+            lock.write_text("someone-else")  # our lock was stolen and replaced while we held it
+        self.assertTrue(lock.exists())
+        self.assertEqual(lock.read_text(), "someone-else")
+
+    def test_grade_result_keeps_large_and_precise_numbers(self):
+        self.estimate("big", 2500000, unit="bytes")
+        _, out, _ = self.run_cli("grade", "1", "--actual", "2.718281828")
+        self.assertEqual(
+            json.loads(out)["result"], "2500000 bytes estimated, 2.718281828 actual: <0.01x"
+        )
+        self.estimate("e2", 1)
+        _, out, _ = self.run_cli("grade", "2", "--actual", "12345678")
+        self.assertEqual(
+            json.loads(out)["result"], "1 hours estimated, 12345678 actual: >1000x"
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
