@@ -13,7 +13,7 @@ A public GitHub repo, `narens-claude-skills`, of original Claude skills that peo
 - **Repo name:** `narens-claude-skills`.
 - **Structure:** one plugin per skill.
 - **Site:** README-only for launch. GitHub Pages is deferred.
-- **GitHub username:** `narenDaw`, taken from local `git config user.name`. Assumption: confirm before publishing. It is used in install commands and URLs.
+- **GitHub username:** `NarenDawar` (confirmed by Naren). Used in install commands and URLs.
 - **License:** MIT.
 
 ## Layout
