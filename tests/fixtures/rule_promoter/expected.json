@@ -1,0 +1,54 @@
+{
+  "web-app.md": {
+    "Never edit anything under migrations/": "protected_path",
+    "git push --force": "blocked_command",
+    "console.log(": "banned_content",
+    "Never commit or edit .env": "protected_path",
+    "Run `npm test`": "stop_check",
+    "small, focused functions": "taste",
+    "clear commit messages": "taste",
+    "Keep the UI accessible": "taste"
+  },
+  "python-lib.md": {
+    "_generated/": "protected_path",
+    "Never use `print(`": "banned_content",
+    "pip install": "blocked_command",
+    "Always run `pytest -q`": "stop_check",
+    "type hints": "taste",
+    "backwards compatible": "taste",
+    "Docstrings": "taste"
+  },
+  "data-pipeline.md": {
+    "DROP TABLE": "blocked_command",
+    "data/raw/": "protected_path",
+    "credentials or API keys": "banned_content",
+    "make lint": "stop_check",
+    "production database": "needs_input",
+    "performance": "taste"
+  },
+  "taste-only.md": {
+    "composition over inheritance": "taste",
+    "small and focused": "taste",
+    "reads like prose": "taste",
+    "concise in comments": "taste",
+    "clarity over cleverness": "taste",
+    "Ask before making large": "taste"
+  },
+  "ambiguous.md": {
+    "Be careful with the database": "needs_input",
+    "break the build": "needs_input",
+    "legacy code": "needs_input",
+    "delete important files": "needs_input",
+    "Make sure tests pass": "needs_input",
+    "commit secrets": "banned_content"
+  },
+  "monorepo.md": {
+    "packages/shared/**": "protected_path",
+    "rm -rf": "blocked_command",
+    "TODO": "banned_content",
+    "pnpm typecheck": "stop_check",
+    "never `npm install`": "blocked_command",
+    "own README": "taste",
+    "Review your own diff": "taste"
+  }
+}
