@@ -788,7 +788,9 @@ class BlockedCommandTests(RuleCase):
     def test_push_to_main_rule(self):
         rule = make_rule("blocked_command", patterns=[r"\bgit\s+push\b.*\b(?:main|master)\b"])
         self.assertIsNotNone(self.hit(rule, pre("Bash", command="git push origin main")))
-        self.assertIsNone(self.hit(rule, pre("Bash", command="git push origin feature/main-menu")) and None)
+        # documented false positive: the word-boundary pattern also matches a branch named main-menu
+        self.assertIsNotNone(self.hit(rule, pre("Bash", command="git push origin feature/main-menu")))
+        self.assertIsNone(self.hit(rule, pre("Bash", command="git push origin feature")))
 
     def test_only_bash_and_only_strings(self):
         self.assertIsNone(self.hit(self.rule(), pre("Edit", file_path="a", new_string="git push --force")))
@@ -797,7 +799,7 @@ class BlockedCommandTests(RuleCase):
         self.assertIsNone(self.hit(self.rule(), stop()))
 ```
 
-Note on `test_push_to_main_rule`: its last line asserts nothing about `feature/main-menu` beyond not crashing (the word-boundary regex does match `main` there, which is a documented false-positive; the skill must add an `except_patterns` entry when this matters). Keep the test as written.
+Note on `test_push_to_main_rule`: it pins the documented false positive (the word-boundary pattern also matches a branch named `main-menu`); the skill must state this risk and add an `except_patterns` entry when it matters.
 
 - [ ] **Step 2: Run tests to verify they fail**
 
@@ -967,7 +969,7 @@ def _changed_paths(project):
     """Changed paths from `git status --porcelain`, or None when git cannot tell."""
     try:
         done = subprocess.run(
-            ["git", "status", "--porcelain"], cwd=project, capture_output=True,
+            ["git", "status", "--porcelain", "-uall"], cwd=project, capture_output=True,
             encoding="utf-8", errors="replace", timeout=20,
         )
     except (OSError, subprocess.SubprocessError):
