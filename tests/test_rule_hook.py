@@ -347,5 +347,74 @@ class BlockedCommandTests(RuleCase):
         self.assertIsNone(self.hit(self.rule(), stop()))
 
 
+import shutil
+import subprocess
+
+
+def py(code):
+    return f'"{sys.executable}" -c "{code}"'
+
+
+class StopCheckTests(RuleCase):
+    def rule(self, command, **fields):
+        return make_rule("stop_check", command=command, **fields)
+
+    def test_failing_command_blocks_with_output_tail(self):
+        detail = self.hit(self.rule(py("print('boom here'); import sys; sys.exit(3)")), stop())
+        self.assertIn("exited 3", detail)
+        self.assertIn("boom here", detail)
+
+    def test_passing_command_allows(self):
+        self.assertIsNone(self.hit(self.rule(py("pass")), stop()))
+
+    def test_stop_hook_active_always_allows(self):
+        self.assertIsNone(self.hit(self.rule(py("import sys; sys.exit(1)")), stop(stop_hook_active=True)))
+
+    def test_only_the_stop_event(self):
+        self.assertIsNone(self.hit(self.rule(py("import sys; sys.exit(1)")), pre("Bash", command="ls")))
+
+    def test_timeout_allows_and_warns(self):
+        err = io.StringIO()
+        rule = self.rule(py("import time; time.sleep(5)"), timeout_seconds=0.3)
+        with contextlib.redirect_stderr(err):
+            self.assertIsNone(self.hit(rule, stop()))
+        self.assertIn("timed out", err.getvalue())
+
+    def test_huge_output_is_trimmed_to_the_last_lines(self):
+        rule = self.rule(py("[print('line', i) for i in range(1, 201)]; import sys; sys.exit(1)"))
+        detail = self.hit(rule, stop())
+        self.assertIn("line 200", detail)
+        self.assertNotIn("line 100\n", detail)
+        self.assertLessEqual(len(detail), 2300)
+
+    def test_command_runs_in_the_project_directory(self):
+        Path(self.project, "marker.txt").write_text("x")
+        self.assertIsNone(self.hit(self.rule(py("import os, sys; sys.exit(0 if os.path.exists('marker.txt') else 1)")), stop()))
+
+    def test_simulate_exit_only_when_simulating(self):
+        rule = self.rule(py("pass"))
+        self.assertIsNotNone(self.hit(rule, stop(simulate_exit=1), simulate=True))
+        self.assertIsNone(self.hit(rule, stop(simulate_exit=0), simulate=True))
+        # a real check ignores simulate_exit and runs the command
+        self.assertIsNone(self.hit(rule, stop(simulate_exit=1)))
+
+    @unittest.skipUnless(shutil.which("git"), "git not available")
+    def test_when_changed_globs(self):
+        subprocess.run(["git", "init", "-q"], cwd=self.project, check=True)
+        failing = py("import sys; sys.exit(1)")
+        rule = self.rule(failing, when_changed_globs=["src/**"])
+        self.assertIsNone(self.hit(rule, stop()))  # clean tree: nothing changed
+        Path(self.project, "README.md").write_text("x")
+        self.assertIsNone(self.hit(rule, stop()))  # changed, but outside the globs
+        Path(self.project, "src").mkdir()
+        Path(self.project, "src", "a.py").write_text("x")
+        self.assertIsNotNone(self.hit(rule, stop()))  # changed inside the globs
+
+    def test_not_a_git_repo_always_runs(self):
+        rule = self.rule(py("import sys; sys.exit(1)"), when_changed_globs=["src/**"])
+        with mock.patch.object(rule_hook, "_changed_paths", return_value=None):
+            self.assertIsNotNone(self.hit(rule, stop()))
+
+
 if __name__ == "__main__":
     unittest.main()

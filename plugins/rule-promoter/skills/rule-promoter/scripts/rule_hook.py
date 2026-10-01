@@ -261,5 +261,46 @@ def _blocked_command(rule, tool, tool_input):
     return None
 
 
+def _changed_paths(project):
+    """Changed paths from `git status --porcelain`, or None when git cannot tell."""
+    try:
+        done = subprocess.run(
+            ["git", "status", "--porcelain", "-uall"], cwd=project, capture_output=True,
+            encoding="utf-8", errors="replace", timeout=20,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if done.returncode != 0:
+        return None
+    paths = []
+    for line in done.stdout.splitlines():
+        entry = line[3:]
+        if " -> " in entry:
+            entry = entry.split(" -> ")[-1]
+        paths.append(entry.strip().strip('"').replace("\\", "/"))
+    return paths
+
+
 def _stop_check(rule, payload, project, simulate):
-    return None  # implemented in Task 4
+    if payload.get("stop_hook_active"):
+        return None
+    if simulate and "simulate_exit" in payload:
+        return "the check failed (simulated)" if payload["simulate_exit"] else None
+    globs = rule.get("when_changed_globs")
+    if globs:
+        changed = _changed_paths(project)
+        if changed is not None and not any(glob_match(globs, p) for p in changed):
+            return None
+    command = rule["command"]
+    try:
+        done = subprocess.run(
+            command, shell=True, cwd=project, capture_output=True, encoding="utf-8",
+            errors="replace", timeout=rule.get("timeout_seconds", 120),
+        )
+    except subprocess.TimeoutExpired:
+        print(f"[rule_hook] stop check {rule['id']} timed out; allowing the stop", file=sys.stderr)
+        return None
+    if done.returncode == 0:
+        return None
+    tail = "\n".join((done.stdout + done.stderr).splitlines()[-20:])[-2000:]
+    return f"`{command}` exited {done.returncode}:\n{tail}"
