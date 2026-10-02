@@ -466,7 +466,7 @@ class CheckTests(MainCase):
         self.assertEqual(body["permissionDecision"], "deny")
         self.assertEqual(
             body["permissionDecisionReason"],
-            "Rule no-migration-edits: Create a new migration instead. (from CLAUDE.md:14)",
+            "Rule no-migration-edits: Create a new migration instead. (from CLAUDE.md:14) [path: app/migrations/9.py]",
         )
 
     def test_stop_violation_blocks(self):
@@ -704,6 +704,51 @@ class CompileTests(unittest.TestCase):
             with self.subTest(script=name), warnings.catch_warnings():
                 warnings.simplefilter("error")
                 compile(source, name, "exec")
+
+
+class DeferredMinorTests(RuleCase):
+    # M-1: "enabled" must be a boolean, or "false" (a truthy string) would silently enable a rule
+    def test_enabled_must_be_a_boolean(self):
+        rule = make_rule("protected_path", globs=["a/**"], enabled="false")
+        errors = rule_hook.validate_rules({"version": 1, "rules": [rule]})
+        self.assertTrue(any("enabled" in e for e in errors), errors)
+
+    # M-3: glob syntax the matcher does not support is refused instead of silently never matching
+    def test_unsupported_glob_syntax_is_refused(self):
+        for glob in ("src/[ab].py", "src/{a,b}.py", "./src/**", "/src/**"):
+            rule = make_rule("protected_path", globs=[glob])
+            errors = rule_hook.validate_rules({"version": 1, "rules": [rule]})
+            self.assertTrue(any("glob" in e for e in errors), (glob, errors))
+
+    def test_supported_globs_still_validate(self):
+        rule = make_rule("protected_path", globs=["**/migrations/**", "*.env", "docs/?.md"], allow_globs=["a/*.py"])
+        self.assertEqual(rule_hook.validate_rules({"version": 1, "rules": [rule]}), [])
+
+    # M-5: a stop check cannot be given more time than the installed Stop hook has
+    def test_timeout_seconds_is_capped_below_the_hook_budget(self):
+        rule = make_rule("stop_check", command="true", timeout_seconds=100000)
+        errors = rule_hook.validate_rules({"version": 1, "rules": [rule]})
+        self.assertTrue(any("timeout_seconds" in e for e in errors), errors)
+        ok = make_rule("stop_check", command="true", timeout_seconds=rule_hook.MAX_TIMEOUT)
+        self.assertEqual(rule_hook.validate_rules({"version": 1, "rules": [ok]}), [])
+
+    # M-7: the deny reason says what matched
+    def test_deny_reason_includes_the_matched_detail(self):
+        rule = make_rule("protected_path", id="no-env", message="Do not edit .env.", globs=["**/.env"])
+        payload = pre("Edit", file_path=".env")
+        out = rule_hook.decision(payload, rule, self.hit(rule, payload))
+        self.assertIn(".env", out["hookSpecificOutput"]["permissionDecisionReason"])
+        self.assertIn("path: .env", out["hookSpecificOutput"]["permissionDecisionReason"])
+
+    # M-8: very deep nesting must not make the collectors give up (and fail open)
+    def test_deeply_nested_tool_input_is_still_checked(self):
+        node = {"file_path": "app/migrations/1.py"}
+        for _ in range(5000):
+            node = {"wrapper": node}
+        found = rule_hook.collect_paths(node)
+        self.assertEqual(found, ["app/migrations/1.py"])
+        found_text = rule_hook.collect_text({"edits": [node and {"deep": [{"new_string": "x"}] * 3}]})
+        self.assertEqual(found_text, ["x", "x", "x"])
 
 
 if __name__ == "__main__":

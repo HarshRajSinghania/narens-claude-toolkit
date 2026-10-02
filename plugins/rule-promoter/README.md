@@ -69,6 +69,8 @@ Rule no-migration-edits: Migrations are generated. Create a new migration instea
 - Claude can still edit `.claude/rules.json`, `.claude/hooks/` and `.claude/settings.json`. Once you are happy with the setup, you can add a protect rule for those paths; it also blocks re-running this skill until you disable it.
 - If one rule in `rules.json` is invalid, the engine keeps enforcing the valid ones and warns about the bad one on every tool call.
 - The hook entries use exec-form `command` plus `args`. If your Claude Code version does not run them (hooks never fire although the self-test passes), the skill can write the one-line shell form instead (`--shell-form`).
+- A stop check's `timeout_seconds` is capped at 280, and several stop checks share one 300-second hook budget: if they are slow together, the hook can be cut off and the stop is allowed.
+- A regular expression that backtracks badly is not guarded against; keep patterns simple.
 - It does not measure which rules Claude actually breaks, and it does not re-sync automatically when CLAUDE.md changes: run it again.
 
 ## Turning it off

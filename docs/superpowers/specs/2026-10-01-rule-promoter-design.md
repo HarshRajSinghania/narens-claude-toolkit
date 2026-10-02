@@ -80,7 +80,7 @@ Standard library only, Python 3.9+. Subcommands:
 - `check`: reads the hook payload from stdin; `hook_event_name` selects `PreToolUse` or `Stop` handling. On a violation of a `PreToolUse` rule it prints the JSON `deny` decision with the reason `Rule <id>: <message> (from <source>)` and exits 0. On a `Stop` violation it prints `{"decision":"block","reason":...}` and exits 0; if `stop_hook_active` is true it allows. On allow it prints nothing and exits 0. The first violated rule wins and is the only one reported.
 - `selftest [--rules PATH]`: runs every enabled rule's `proof.violation` (must block) and `proof.pass` (must allow) through the same code path as `check`, prints one line per rule, and exits 0 only if all pass; it also validates the rules file (known types, required fields, valid regular expressions and globs, unique ids).
 - Project directory: `CLAUDE_PROJECT_DIR` if set, else the payload `cwd`, else the current directory. Rules are read from `<project>/.claude/rules.json`, overridable with `--rules` for tests.
-- Failure behavior: an internal error, malformed JSON, a missing or invalid rules file, or an unknown tool prints `[rule_hook] <reason>` on stderr and exits 1 (a non-blocking error), so a broken engine never blocks every tool call. A payload for a tool the rules do not cover is allowed silently.
+- Failure behavior: an internal error, malformed JSON, or a missing or invalid rules file prints `[rule_hook] <reason>` on stderr and exits 1 (a non-blocking error), so a broken engine never blocks every tool call. A payload for a tool the rules do not cover is allowed silently.
 - Speed: regular expressions are compiled once per run; `PreToolUse` handling makes no subprocess calls.
 
 ## settings.json entries

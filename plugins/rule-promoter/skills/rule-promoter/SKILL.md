@@ -53,7 +53,7 @@ Every rule has `id` (kebab-case), `source` (`CLAUDE.md:14`), `text` (the origina
 
 ```json
 {"id": "no-force-push", "source": "CLAUDE.md:4", "text": "Never run git push --force",
- "type": "blocked_command", "patterns": ["\\bgit\\s+push\\b.*(?:--force\\b|\\s-f\\b)"], "except_patterns": ["--force-with-lease"],
+ "type": "blocked_command", "patterns": ["\\bgit\\s+push\\b.*(?:--force\\b|\\s-[A-Za-z]*f[A-Za-z]*\\b|\\s\\+\\w)"], "except_patterns": ["--force-with-lease"],
  "message": "Force pushes are not allowed.",
  "proof": {"violation": {"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": "git push --force origin main"}},
            "pass": {"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": "git push origin feature"}}}}
@@ -73,7 +73,7 @@ Every rule has `id` (kebab-case), `source` (`CLAUDE.md:14`), `text` (the origina
 
 ```json
 {"id": "tests-pass", "source": "CLAUDE.md:6", "text": "Run npm test before you finish",
- "type": "stop_check", "command": "npm test", "timeout_seconds": 300, "when_changed_globs": ["src/**", "tests/**"],
+ "type": "stop_check", "command": "npm test", "timeout_seconds": 240, "when_changed_globs": ["src/**", "tests/**"],
  "message": "The tests must pass before you stop.",
  "proof": {"violation": {"hook_event_name": "Stop", "simulate_exit": 1}, "pass": {"hook_event_name": "Stop", "simulate_exit": 0}}}
 ```
@@ -85,6 +85,7 @@ The file is `{"version": 1, "rules": [ ... ]}`. Tool payloads: Bash uses `tool_i
 - Enforceable: "never edit X/", "don't touch .env", "never run Y", "don't use Z in files under W", "run T before finishing".
 - Taste: "prefer small functions", "write clear commit messages", "keep the UI accessible", "favor clarity". No pattern can decide these.
 - Needs input: "be careful with the database", "make sure tests pass" (which command?), "avoid legacy code" (which paths?). Ask; do not guess.
+- Globs support only `*`, `**` and `?`, relative to the project (no `[ab]`, `{a,b}`, leading `./` or `/`); the engine refuses anything else. `timeout_seconds` is at most 280, and `enabled` must be `true` or `false`.
 - Prefer narrow patterns. State the false-positive risk for each rule (for example a `main` pattern also matches a branch named `main-menu`) and add `allow_globs` or `except_patterns` when that matters.
 
 ## Tone
