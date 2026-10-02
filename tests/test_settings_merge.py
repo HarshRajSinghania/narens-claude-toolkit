@@ -203,5 +203,91 @@ class LauncherTests(unittest.TestCase):
         self.assertIsNotNone(found)
 
 
+class ReviewFixTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path = Path(self.tmp.name) / ".claude" / "settings.json"
+        self.path.parent.mkdir(parents=True)
+
+    def run_cli(self, *argv):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = sm.main(list(argv))
+        return code, out.getvalue(), err.getvalue()
+
+    # I1: plan must not crash on characters a narrow console encoding cannot print
+    def test_plan_with_non_cp1252_text_does_not_crash(self):
+        self.path.write_text(
+            json.dumps({"statusLine": {"command": "echo \U0001f680 日本語"}}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        buf = io.BytesIO()
+        narrow = io.TextIOWrapper(buf, encoding="cp1252", write_through=True)
+        err = io.StringIO()
+        with mock.patch("sys.stdout", narrow), contextlib.redirect_stderr(err):
+            code = sm.main(["plan", "--settings", str(self.path), "--launcher", "python3", "--pretool"])
+        self.assertEqual(code, 0, err.getvalue())
+        self.assertIn("\U0001f680".encode("utf-8"), buf.getvalue())
+
+    # I2: the diff is against the raw file, and duplicate keys are refused rather than dropped
+    def test_plan_diff_is_against_the_raw_file(self):
+        self.path.write_bytes('{\r\n    "model": "x"\r\n}\r\n'.encode("utf-8"))
+        code, out, _ = self.run_cli("plan", "--settings", str(self.path), "--launcher", "python3", "--pretool")
+        self.assertEqual(code, 0)
+        self.assertIn('-    "model": "x"', out)  # the original 4-space line is shown as removed
+        self.assertIn('+  "model": "x"', out)    # and the reformatted line as added
+
+    def test_duplicate_keys_are_refused_and_nothing_is_written(self):
+        original = '{"model": "a", "model": "b"}'
+        self.path.write_text(original, encoding="utf-8")
+        for command in ("plan", "apply"):
+            code, _, err = self.run_cli(command, "--settings", str(self.path), "--launcher", "python3", "--pretool")
+            self.assertEqual(code, 2)
+            self.assertIn("duplicate", err)
+        self.assertEqual(self.path.read_text(encoding="utf-8"), original)
+
+    # I3: only our own entries are removed, never other people's hooks
+    def test_only_our_entries_are_removed(self):
+        ours = {"type": "command", "command": "python3",
+                "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/rule_hook.py", "check"]}
+        mixed = {"hooks": {
+            "PreToolUse": [{"hooks": [{"type": "command", "command": "./audit.sh"}, ours]}],
+            "PostToolUse": [{"matcher": "Bash", "if": "Bash(git *)", "hooks": [
+                {"type": "command", "command": "python", "args": ["~/other/rule_hook.py", "--audit"]},
+                {"type": "command", "command": "node ~/tools/eslint_rule_hook.py.js"}]}],
+        }}
+        merged = sm.merge(mixed, sm.build_groups(["python3"], True, False))
+        pre = merged["hooks"]["PreToolUse"]
+        self.assertIn("./audit.sh", [h["command"] for g in pre for h in g["hooks"]])
+        ours_count = sum(1 for g in pre for h in g["hooks"] if ".claude/hooks/rule_hook.py" in " ".join(h.get("args", [])))
+        self.assertEqual(ours_count, 1)  # only the freshly written one
+        self.assertEqual(merged["hooks"]["PostToolUse"], mixed["hooks"]["PostToolUse"])
+
+    def test_group_with_null_hooks_is_refused(self):
+        with self.assertRaises(sm.SettingsError):
+            sm.merge({"hooks": {"PreToolUse": [{"hooks": None}]}}, {})
+
+    # I6: a shell-form fallback for Claude Code versions without exec-form args
+    def test_shell_form_entries(self):
+        hook = sm.build_groups(["python3"], True, False, shell_form=True)["PreToolUse"][0]["hooks"][0]
+        self.assertEqual(hook["command"], 'python3 "$CLAUDE_PROJECT_DIR/.claude/hooks/rule_hook.py" check')
+        self.assertNotIn("args", hook)
+        py = sm.build_groups(["py", "-3"], True, False, shell_form=True)["PreToolUse"][0]["hooks"][0]
+        self.assertTrue(py["command"].startswith('py -3 "$CLAUDE_PROJECT_DIR'))
+
+    def test_rerun_converts_between_forms_without_duplicates(self):
+        exec_form = sm.merge({}, sm.build_groups(["python3"], True, False))
+        shell_form = sm.merge(exec_form, sm.build_groups(["python3"], True, False, shell_form=True))
+        self.assertEqual(len(shell_form["hooks"]["PreToolUse"]), 1)
+        self.assertNotIn("args", shell_form["hooks"]["PreToolUse"][0]["hooks"][0])
+
+    def test_cli_accepts_shell_form(self):
+        code, _, _ = self.run_cli("apply", "--settings", str(self.path), "--launcher", "python3", "--pretool", "--shell-form")
+        self.assertEqual(code, 0)
+        hook = json.loads(self.path.read_text(encoding="utf-8"))["hooks"]["PreToolUse"][0]["hooks"][0]
+        self.assertIn("$CLAUDE_PROJECT_DIR", hook["command"])
+
+
 if __name__ == "__main__":
     unittest.main()

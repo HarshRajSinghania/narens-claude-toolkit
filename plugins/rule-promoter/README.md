@@ -62,6 +62,7 @@ Rule no-migration-edits: Migrations are generated. Create a new migration instea
 - Hooks are guardrails, not a security boundary. A helper script or `bash -c` can get around a pattern.
 - A `must-pass before stopping` check blocks the first stop attempt and tells Claude to fix the failure. If Claude cannot fix it, a loop guard lets the second attempt through, so a failing check can delay finishing but never wedge a session.
 - A pattern that is too broad can block legitimate work (for example a `main` pattern also matches a branch named `main-menu`); the skill states the risk for each rule and adds exceptions where it matters.
+- The hook entries use exec-form `command` plus `args`. If your Claude Code version does not run them (hooks never fire although the self-test passes), the skill can write the one-line shell form instead (`--shell-form`).
 - It does not measure which rules Claude actually breaks, and it does not re-sync automatically when CLAUDE.md changes: run it again.
 
 ## Turning it off
