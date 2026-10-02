@@ -10,8 +10,10 @@ import functools
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 RULE_TYPES = ("protected_path", "blocked_command", "banned_content", "stop_check")
@@ -20,6 +22,7 @@ PATH_KEYS = ("file_path", "notebook_path")
 TEXT_KEYS = ("content", "file_content", "new_string", "new_content", "new_source")
 _ID = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 _NT = os.name == "nt"
+_CI = _NT or sys.platform == "darwin"  # case-insensitive file systems by default
 
 
 class RulesError(Exception):
@@ -48,15 +51,28 @@ def glob_to_regex(glob):
         else:
             out.append(re.escape(g[i]))
             i += 1
-    return re.compile("^" + "".join(out) + "$", re.IGNORECASE if _NT else 0)
+    return re.compile("^" + "".join(out) + "$", re.IGNORECASE if _CI else 0)
 
 
 def glob_match(globs, rel):
     return any(glob_to_regex(g).match(rel) for g in globs)
 
 
+def _clean_windows(path_text):
+    """Drop a \\?\ prefix and an NTFS alternate-data-stream suffix (.env::$DATA)."""
+    if path_text.startswith("\\\\?\\"):
+        path_text = path_text[4:]
+    drive, rest = os.path.splitdrive(path_text)
+    head, tail = os.path.split(rest)
+    if ":" in tail:
+        tail = tail.split(":", 1)[0]
+    return drive + os.path.join(head, tail) if tail else path_text
+
+
 def relative_path(path_text, project):
     """Project-relative path with forward slashes; the absolute path when outside the project."""
+    if _NT:
+        path_text = _clean_windows(path_text)
     full = os.path.normpath(os.path.join(project, path_text))
     try:
         rel = os.path.relpath(full, project)
@@ -66,6 +82,19 @@ def relative_path(path_text, project):
     if rel == ".." or rel.startswith("../"):
         rel = full.replace("\\", "/")
     return rel
+
+
+def path_forms(path_text, project):
+    """Forms of a path to test: as written, and with symlinks, junctions and short names resolved."""
+    forms = [relative_path(path_text, project)]
+    try:
+        full = os.path.normpath(os.path.join(project, path_text))
+        resolved = relative_path(os.path.realpath(full), os.path.realpath(project))
+    except (OSError, ValueError):
+        resolved = None
+    if resolved and resolved not in forms:
+        forms.append(resolved)
+    return forms
 
 
 def _collect(obj, keys):
@@ -181,7 +210,7 @@ def validate_rules(data):
 # --- rule checks ---------------------------------------------------------------------------
 
 def _matches_any(patterns, text):
-    return any(re.search(p, text) for p in patterns)
+    return any(re.search(p, text, re.MULTILINE) for p in patterns)
 
 
 def check_rule(rule, payload, project, simulate=False):
@@ -200,7 +229,7 @@ def check_rule(rule, payload, project, simulate=False):
         return _blocked_command(rule, tool, tool_input)
     if tool not in PATH_TOOLS:
         return None
-    paths = [relative_path(p, project) for p in collect_paths(tool_input)]
+    paths = [rel for p in collect_paths(tool_input) for rel in path_forms(p, project)]
     if kind == "protected_path":
         for rel in paths:
             if glob_match(rule["globs"], rel) and not glob_match(rule.get("allow_globs", []), rel):
@@ -218,6 +247,7 @@ def check_rule(rule, payload, project, simulate=False):
 
 def split_segments(command):
     """Split a shell command into segments on &&, ||, ;, |, & and newlines (quotes respected)."""
+    command = command.replace("\\\r\n", "").replace("\\\n", "")  # line continuations
     segments, buf, quote, i = [], [], None, 0
     while i < len(command):
         ch = command[i]
@@ -261,24 +291,79 @@ def _blocked_command(rule, tool, tool_input):
     return None
 
 
-def _changed_paths(project):
-    """Changed paths from `git status --porcelain`, or None when git cannot tell."""
+def _git_output(args, project):
     try:
-        done = subprocess.run(
-            ["git", "status", "--porcelain", "-uall"], cwd=project, capture_output=True,
-            encoding="utf-8", errors="replace", timeout=20,
-        )
+        done = subprocess.run(["git", *args], cwd=project, capture_output=True, timeout=20)
     except (OSError, subprocess.SubprocessError):
         return None
     if done.returncode != 0:
         return None
-    paths = []
-    for line in done.stdout.splitlines():
-        entry = line[3:]
-        if " -> " in entry:
-            entry = entry.split(" -> ")[-1]
-        paths.append(entry.strip().strip('"').replace("\\", "/"))
+    return done.stdout.decode("utf-8", errors="replace")
+
+
+def _changed_paths(project):
+    """Uncommitted changes relative to the project (renames list both paths), or None if git cannot tell."""
+    prefix = _git_output(["rev-parse", "--show-prefix"], project)
+    status = _git_output(["status", "--porcelain=v1", "-z", "-uall", "--", "."], project)
+    if prefix is None or status is None:
+        return None
+    prefix = prefix.strip().replace("\\", "/")
+    fields = status.split("\0")
+    paths, i = [], 0
+    while i < len(fields):
+        entry = fields[i]
+        i += 1
+        if len(entry) < 4:
+            continue
+        code, names = entry[:2], [entry[3:]]
+        if "R" in code or "C" in code:  # a rename or copy: the original path follows
+            if i < len(fields):
+                names.append(fields[i])
+                i += 1
+        for name in names:
+            name = name.replace("\\", "/")
+            if prefix:
+                if not name.startswith(prefix):
+                    continue
+                name = name[len(prefix):]
+            paths.append(name)
     return paths
+
+
+def _kill_tree(proc):
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True, timeout=10)
+        else:
+            os.killpg(proc.pid, signal.SIGKILL)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    try:
+        proc.kill()
+    except OSError:
+        pass
+    try:
+        proc.wait(timeout=5)
+    except subprocess.SubprocessError:
+        pass
+
+
+def _run_command(command, project, timeout):
+    """Run a shell command, killing its whole process tree on timeout. Returns (code, output) or None."""
+    options = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt"
+               else {"start_new_session": True})
+    with tempfile.TemporaryFile() as sink:
+        proc = subprocess.Popen(
+            command, shell=True, cwd=project, stdin=subprocess.DEVNULL,
+            stdout=sink, stderr=subprocess.STDOUT, **options,
+        )
+        try:
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            _kill_tree(proc)
+            return None
+        sink.seek(0)
+        return proc.returncode, sink.read().decode("utf-8", errors="replace")
 
 
 def _stop_check(rule, payload, project, simulate):
@@ -292,18 +377,15 @@ def _stop_check(rule, payload, project, simulate):
         if changed is not None and not any(glob_match(globs, p) for p in changed):
             return None
     command = rule["command"]
-    try:
-        done = subprocess.run(
-            command, shell=True, cwd=project, capture_output=True, encoding="utf-8",
-            errors="replace", timeout=rule.get("timeout_seconds", 120),
-        )
-    except subprocess.TimeoutExpired:
+    result = _run_command(command, project, rule.get("timeout_seconds", 120))
+    if result is None:
         print(f"[rule_hook] stop check {rule['id']} timed out; allowing the stop", file=sys.stderr)
         return None
-    if done.returncode == 0:
+    code, output = result
+    if code == 0:
         return None
-    tail = "\n".join((done.stdout + done.stderr).splitlines()[-20:])[-2000:]
-    return f"`{command}` exited {done.returncode}:\n{tail}"
+    tail = "\n".join(output.splitlines()[-20:])[-2000:]
+    return f"`{command}` exited {code}:\n{tail}"
 
 
 # --- evaluation, output, CLI ---------------------------------------------------------------
@@ -312,18 +394,45 @@ def project_dir(payload):
     return os.environ.get("CLAUDE_PROJECT_DIR") or payload.get("cwd") or os.getcwd()
 
 
-def load_rules(path):
+def _read_rules_data(path):
     path = Path(path)
     if not path.is_file():
         raise RulesError(f"rules file not found: {path}")
     try:
-        data = json.loads(path.read_text(encoding="utf-8-sig"))
+        return json.loads(path.read_text(encoding="utf-8-sig"))
     except ValueError as exc:
         raise RulesError(f"{path} is not valid JSON ({exc})") from None
-    errors = validate_rules(data)
-    if errors:
-        raise RulesError("; ".join(errors))
-    return data["rules"]
+
+
+def split_rules(data):
+    """(valid rules, problems). Each rule is validated on its own; a later duplicate id is a problem."""
+    if not isinstance(data, dict) or data.get("version") != 1:
+        raise RulesError('rules.json must be an object with "version": 1')
+    rules = data.get("rules")
+    if not isinstance(rules, list):
+        raise RulesError('"rules" must be a list')
+    good, problems, seen = [], [], set()
+    for rule in rules:
+        errors = validate_rules({"version": 1, "rules": [rule]})
+        rule_id = rule.get("id") if isinstance(rule, dict) else None
+        if not errors and rule_id in seen:
+            errors = [f"rule {rule_id!r}: duplicate id"]
+        if errors:
+            problems += errors
+        else:
+            good.append(rule)
+            seen.add(rule_id)
+    return good, problems
+
+
+def load_rules(path, strict=True):
+    """strict: the valid rules, or RulesError if any rule is invalid. lenient: (valid rules, problems)."""
+    good, problems = split_rules(_read_rules_data(path))
+    if strict:
+        if problems:
+            raise RulesError("; ".join(problems))
+        return good
+    return good, problems
 
 
 def evaluate(payload, rules, project, simulate=False):
@@ -358,11 +467,14 @@ def run_check(stream):
     if not isinstance(payload, dict):
         raise ValueError("the hook payload must be a JSON object")
     project = project_dir(payload)
-    rules = load_rules(Path(project) / ".claude" / "rules.json")
+    rules, problems = load_rules(Path(project) / ".claude" / "rules.json", strict=False)
     hit = evaluate(payload, rules, project)
+    for problem in problems:
+        print(f"[rule_hook] {problem}", file=sys.stderr)
     if hit:
         print(json.dumps(decision(payload, *hit)))
-    return 0
+        return 0
+    return 1 if problems else 0
 
 
 def run_selftest(rules_path=None):

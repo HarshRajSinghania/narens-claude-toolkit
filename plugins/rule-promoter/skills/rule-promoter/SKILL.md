@@ -29,7 +29,7 @@ Run both with a Python 3 command that works on this machine (try `python3`, `pyt
 4. **Prove.** After approval, create `.claude/hooks/` and copy `scripts/rule_hook.py` there, write `.claude/rules.json`, then run `python .claude/hooks/rule_hook.py selftest` from the project root. Show the output. A rule whose proof fails is not installed: fix its pattern or drop it, and say which one.
 5. **Install.** Run `settings_merge.py launcher --script .claude/hooks/rule_hook.py`, then `settings_merge.py plan --settings .claude/settings.json --launcher "<launcher>" [--pretool] [--stop]` (`--pretool` if any path, command or content rules exist; `--stop` if any stop_check rules exist). Show the diff and ask for a yes. Only after a yes, run the same command with `apply`. If it reports invalid settings JSON or a duplicate key, stop and tell the user; do not edit the file by hand. The helper removes only its own `rule_hook.py` entries and leaves every other hook alone. If the end-to-end check below shows the hook did not fire although `selftest` passes and `disableAllHooks` is not set, some Claude Code versions lack exec-form `args`: re-run `plan` and `apply` with `--shell-form`.
 6. **Verify end to end.** If you can run `claude -p` in the project, test with a `protected_path` or `banned_content` rule against a throwaway file (for example ask it to edit `tmp-rule-check.txt` under a protected glob), never with a `blocked_command` or `stop_check` that would really run something, and undo any change afterwards. Check `disableAllHooks` in the project, local and user settings before concluding anything. Confirm the output shows the `Rule <id>:` block message, and show it. If you cannot run a nested session, say so and say the install is verified only by `selftest`.
-7. **Report.** List the promoted rules, the skipped rules with reasons, and how to turn things off: set `"enabled": false` on a rule in `.claude/rules.json`, or delete the `rule_hook.py` entries from `.claude/settings.json`.
+7. **Report.** List the promoted rules, the skipped rules with reasons, and one limitation: Claude can still edit `.claude/rules.json`, `.claude/hooks/` and `.claude/settings.json`. Offer to add a `protected_path` rule for them, and say it also blocks re-running this skill until the rule is disabled. Then say how to turn things off: set `"enabled": false` on a rule in `.claude/rules.json`, or delete the `rule_hook.py` entries from `.claude/settings.json`.
 
 Never write `rules.json`, hook files or `settings.json` before the user has reviewed the table. Never write `settings.json` before showing the diff and getting a yes.
 
@@ -49,7 +49,7 @@ Every rule has `id` (kebab-case), `source` (`CLAUDE.md:14`), `text` (the origina
            "pass": {"hook_event_name": "PreToolUse", "tool_name": "Edit", "tool_input": {"file_path": "app/models.py", "old_string": "a", "new_string": "b"}}}}
 ```
 
-**blocked_command**: Bash commands matching a regular expression, tested against each segment of a compound command. Use `except_patterns` for safe variants.
+**blocked_command**: Bash commands matching a regular expression, tested against each segment of a compound command. Use `except_patterns` for safe variants; an exception exempts the whole segment, so make it specific.
 
 ```json
 {"id": "no-force-push", "source": "CLAUDE.md:4", "text": "Never run git push --force",
@@ -69,7 +69,7 @@ Every rule has `id` (kebab-case), `source` (`CLAUDE.md:14`), `text` (the origina
            "pass": {"hook_event_name": "PreToolUse", "tool_name": "Write", "tool_input": {"file_path": "src/a.js", "content": "logger.info(1)"}}}}
 ```
 
-**stop_check**: a command that must succeed before Claude may stop. It blocks the stop when the command exits non-zero. `when_changed_globs` limits it to turns that changed matching files. The proof uses `simulate_exit` (selftest does not run the real command).
+**stop_check**: a command that must succeed before Claude may stop. It blocks the stop when the command exits non-zero. `when_changed_globs` limits it to turns that changed matching files (uncommitted changes only: omit it if Claude tends to commit before stopping). The proof uses `simulate_exit` (selftest does not run the real command).
 
 ```json
 {"id": "tests-pass", "source": "CLAUDE.md:6", "text": "Run npm test before you finish",

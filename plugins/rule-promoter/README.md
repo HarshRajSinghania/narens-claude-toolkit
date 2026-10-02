@@ -62,6 +62,12 @@ Rule no-migration-edits: Migrations are generated. Create a new migration instea
 - Hooks are guardrails, not a security boundary. A helper script or `bash -c` can get around a pattern.
 - A `must-pass before stopping` check blocks the first stop attempt and tells Claude to fix the failure. If Claude cannot fix it, a loop guard lets the second attempt through, so a failing check can delay finishing but never wedge a session.
 - A pattern that is too broad can block legitimate work (for example a `main` pattern also matches a branch named `main-menu`); the skill states the risk for each rule and adds exceptions where it matters.
+- Path matching is best effort: case-insensitive on Windows and macOS, and symlinks, junctions and Windows short names are resolved, but unusual aliases may still slip through.
+- `when_changed_globs` only sees uncommitted changes (renames count). If Claude commits before it stops, the check is skipped, so leave the globs out when that matters.
+- `except_patterns` exempt the whole command segment: matching text anywhere in it, even in a shell comment, lets the command through.
+- `banned_content` inspects the new text of each edit, so a banned string assembled across several edits is not caught.
+- Claude can still edit `.claude/rules.json`, `.claude/hooks/` and `.claude/settings.json`. Once you are happy with the setup, you can add a protect rule for those paths; it also blocks re-running this skill until you disable it.
+- If one rule in `rules.json` is invalid, the engine keeps enforcing the valid ones and warns about the bad one on every tool call.
 - The hook entries use exec-form `command` plus `args`. If your Claude Code version does not run them (hooks never fire although the self-test passes), the skill can write the one-line shell form instead (`--shell-form`).
 - It does not measure which rules Claude actually breaks, and it does not re-sync automatically when CLAUDE.md changes: run it again.
 

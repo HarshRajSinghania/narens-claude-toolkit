@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import types
 import unittest
 from pathlib import Path
@@ -77,10 +78,10 @@ class GlobTests(unittest.TestCase):
         self.assertFalse(rule_hook.glob_match(["docs/?.md"], "docs/ab.md"))
 
     def test_globs_are_case_insensitive_on_windows(self):
-        with mock.patch.object(rule_hook, "_NT", True):
+        with mock.patch.object(rule_hook, "_CI", True):
             rule_hook.glob_to_regex.cache_clear()
             self.assertTrue(rule_hook.glob_match(["**/migrations/**"], "App/Migrations/x.py"))
-        with mock.patch.object(rule_hook, "_NT", False):
+        with mock.patch.object(rule_hook, "_CI", False):
             rule_hook.glob_to_regex.cache_clear()
             self.assertFalse(rule_hook.glob_match(["**/migrations/**"], "App/Migrations/x.py"))
 
@@ -569,6 +570,122 @@ class SelftestTests(MainCase):
                          proof={"violation": stop(simulate_exit=1), "pass": stop(simulate_exit=0)})
         self.write_rules([rule])
         self.assertEqual(self.run_main(["selftest"])[0], 0)
+
+
+class EngineReviewTests(RuleCase):
+    # --- I-1: the stop_check timeout must hold even when a grandchild keeps running ----------
+    def test_stop_timeout_is_honoured_with_a_hung_grandchild(self):
+        rule = make_rule("stop_check", command=py("import time; time.sleep(15)"), timeout_seconds=1)
+        err = io.StringIO()
+        started = time.monotonic()
+        with contextlib.redirect_stderr(err):
+            self.assertIsNone(self.hit(rule, stop()))
+        self.assertLess(time.monotonic() - started, 6)
+        self.assertIn("timed out", err.getvalue())
+
+    # --- I-2 and I-3: git status parsing -------------------------------------------------------
+    def git(self, *args, cwd=None):
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", *args],
+                       cwd=cwd or self.project, check=True, capture_output=True)
+
+    @unittest.skipUnless(shutil.which("git"), "git not available")
+    def test_when_changed_globs_in_a_project_below_the_repo_root(self):
+        self.git("init", "-q")
+        web = Path(self.project, "packages", "web")
+        (web / "src").mkdir(parents=True)
+        Path(self.project, "other").mkdir()
+        Path(self.project, "other", "b.py").write_text("x")  # a change outside the project: ignored
+        rule = make_rule("stop_check", command=py("import sys; sys.exit(1)"), when_changed_globs=["src/**"])
+        self.assertIsNone(rule_hook.check_rule(rule, stop(), str(web)))
+        (web / "src" / "a.py").write_text("x")
+        self.assertIsNotNone(rule_hook.check_rule(rule, stop(), str(web)))
+
+    @unittest.skipUnless(shutil.which("git"), "git not available")
+    def test_when_changed_globs_with_unicode_names_and_renames(self):
+        self.git("init", "-q")
+        (Path(self.project) / "src").mkdir()
+        Path(self.project, "src", "a.py").write_text("x")
+        self.git("add", "-A")
+        self.git("commit", "-qm", "base")
+        failing = py("import sys; sys.exit(1)")
+        rule = make_rule("stop_check", command=failing, when_changed_globs=["src/**"])
+        self.assertIsNone(self.hit(rule, stop()))  # clean tree
+        self.git("mv", "src/a.py", "moved.py")  # the rename's ORIGINAL path was under src/
+        self.assertIsNotNone(self.hit(rule, stop()))
+        self.git("reset", "-q", "--hard")
+        Path(self.project, "src", "café.py").write_text("x")  # git C-quotes non-ASCII names
+        self.assertIsNotNone(self.hit(make_rule("stop_check", command=failing, when_changed_globs=["src/*.py"]), stop()))
+
+    # --- I-5: path aliases ---------------------------------------------------------------------
+    def test_symlink_or_junction_does_not_hide_a_protected_path(self):
+        real = Path(self.project, "app", "migrations")
+        real.mkdir(parents=True)
+        link = Path(self.project, "m")
+        try:
+            if os.name == "nt":
+                subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(real)], check=True, capture_output=True)
+            else:
+                os.symlink(real, link, target_is_directory=True)
+        except (OSError, subprocess.SubprocessError):
+            self.skipTest("cannot create a link here")
+        rule = make_rule("protected_path", globs=["**/migrations/**"])
+        self.assertIsNotNone(self.hit(rule, pre("Write", file_path=str(link / "0002.py"), content="x")))
+
+    @unittest.skipUnless(os.name == "nt", "Windows only")
+    def test_ntfs_stream_suffix_and_extended_prefix(self):
+        rule = make_rule("protected_path", globs=["**/.env"])
+        self.assertIsNotNone(self.hit(rule, pre("Write", file_path=self.path(".env::$DATA"), content="x")))
+        self.assertIsNotNone(self.hit(rule, pre("Write", file_path="\\\\?\\" + self.path(".env"), content="x")))
+
+    @unittest.skipUnless(os.name == "nt", "Windows only")
+    def test_short_names_are_resolved(self):
+        import ctypes
+        directory = Path(self.project, "longdirectoryname")
+        directory.mkdir()
+        buf = ctypes.create_unicode_buffer(260)
+        length = ctypes.windll.kernel32.GetShortPathNameW(str(directory), buf, 260)
+        if not length or buf.value.lower() == str(directory).lower():
+            self.skipTest("8.3 short names are disabled on this volume")
+        rule = make_rule("protected_path", globs=["longdirectoryname/**"])
+        self.assertIsNotNone(self.hit(rule, pre("Write", file_path=os.path.join(buf.value, "a.txt"), content="x")))
+
+    # --- I-6 and I-9 ---------------------------------------------------------------------------
+    def test_line_continuation_does_not_hide_a_command(self):
+        rule = make_rule("blocked_command", patterns=[r"\bgit\s+push\b.*(?:--force\b|\s-f\b)"])
+        command = "git push \\\n  --force origin main"
+        self.assertEqual(len(rule_hook.split_segments(command)), 1)
+        self.assertIsNotNone(self.hit(rule, pre("Bash", command=command)))
+
+    def test_banned_content_anchors_work_on_multiline_text(self):
+        rule = make_rule("banned_content", patterns=[r"^import os$"])
+        self.assertIsNotNone(self.hit(rule, pre("Write", file_path="a.py", content="import sys\nimport os\n")))
+        self.assertIsNone(self.hit(rule, pre("Write", file_path="a.py", content="import sys\nimport osx\n")))
+
+
+class OneBadRuleTests(MainCase):
+    def test_one_invalid_rule_does_not_disable_the_others(self):
+        bad = make_rule("protected_path", id="bad-rule", globs=[])
+        self.write_rules([bad, self.migration_rule()])
+        code, out, err = self.run_main(["check"], json.dumps(pre("Edit", file_path="app/migrations/1.py")))
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["hookSpecificOutput"]["permissionDecision"], "deny")
+        self.assertIn("bad-rule", err)
+        code, out, err = self.run_main(["check"], json.dumps(pre("Edit", file_path="app/models.py")))
+        self.assertEqual((code, out), (1, ""))  # a visible non-blocking warning on every call
+        self.assertIn("bad-rule", err)
+
+    def test_duplicate_ids_flag_only_the_later_rule(self):
+        first = self.migration_rule(id="same", message="first")
+        second = self.migration_rule(id="same", message="second")
+        self.write_rules([first, second])
+        code, out, err = self.run_main(["check"], json.dumps(pre("Edit", file_path="app/migrations/1.py")))
+        self.assertEqual(code, 0)
+        self.assertIn("first", out)
+        self.assertIn("duplicate id", err)
+
+    def test_selftest_still_fails_on_any_invalid_rule(self):
+        self.write_rules([make_rule("protected_path", id="bad-rule", globs=[]), self.migration_rule()])
+        self.assertEqual(self.run_main(["selftest"])[0], 1)
 
 
 if __name__ == "__main__":
