@@ -21,6 +21,18 @@ import rule_hook  # noqa: E402
 FIXTURES = helpers.REPO_ROOT / "tests" / "fixtures" / "rule_hook"
 
 
+def fixture_text(name, project):
+    """A captured payload with {PROJECT} filled in.
+
+    The captures came from Windows, so the path after the placeholder uses an escaped backslash;
+    on POSIX that separator becomes a slash (a backslash is just a filename character there).
+    """
+    text = (FIXTURES / name).read_text(encoding="utf-8")
+    if os.sep == "/":
+        text = text.replace("{PROJECT}\\\\", "{PROJECT}/")
+    return text.replace("{PROJECT}", project.replace("\\", "\\\\"))
+
+
 def pre(tool, **tool_input):
     return {"hook_event_name": "PreToolUse", "tool_name": tool, "tool_input": tool_input}
 
@@ -252,10 +264,7 @@ class RealPayloadTests(RuleCase):
     """The fixtures are real payloads captured from Claude Code (see Task 1)."""
 
     def load(self, name):
-        text = (FIXTURES / name).read_text(encoding="utf-8").replace(
-            "{PROJECT}", self.project.replace("\\", "\\\\")
-        )
-        return json.loads(text)
+        return json.loads(fixture_text(name, self.project))
 
     def test_write_fixture(self):
         payload = self.load("PreToolUse-Write.json")
@@ -513,9 +522,7 @@ class CheckTests(MainCase):
     def test_real_captured_write_payload_is_denied(self):
         rule = self.migration_rule(id="no-notes", globs=["notes.txt"], source="CLAUDE.md:3", message="Not notes.txt")
         self.write_rules([rule])
-        text = (FIXTURES / "PreToolUse-Write.json").read_text(encoding="utf-8").replace(
-            "{PROJECT}", self.project.replace("\\", "\\\\"))
-        code, out, _ = self.run_main(["check"], text)
+        code, out, _ = self.run_main(["check"], fixture_text("PreToolUse-Write.json", self.project))
         self.assertEqual(code, 0)
         self.assertEqual(json.loads(out)["hookSpecificOutput"]["permissionDecision"], "deny")
 
@@ -686,6 +693,17 @@ class OneBadRuleTests(MainCase):
     def test_selftest_still_fails_on_any_invalid_rule(self):
         self.write_rules([make_rule("protected_path", id="bad-rule", globs=[]), self.migration_rule()])
         self.assertEqual(self.run_main(["selftest"])[0], 1)
+
+
+class CompileTests(unittest.TestCase):
+    def test_scripts_compile_without_warnings(self):
+        import warnings
+        scripts = helpers.REPO_ROOT / "plugins" / "rule-promoter" / "skills" / "rule-promoter" / "scripts"
+        for name in ("rule_hook.py", "settings_merge.py"):
+            source = (scripts / name).read_text(encoding="utf-8")
+            with self.subTest(script=name), warnings.catch_warnings():
+                warnings.simplefilter("error")
+                compile(source, name, "exec")
 
 
 if __name__ == "__main__":

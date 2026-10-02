@@ -59,7 +59,7 @@ def glob_match(globs, rel):
 
 
 def _clean_windows(path_text):
-    """Drop a \\?\ prefix and an NTFS alternate-data-stream suffix (.env::$DATA)."""
+    """Drop a Windows extended-length prefix and an NTFS alternate-data-stream suffix (.env::$DATA)."""
     if path_text.startswith("\\\\?\\"):
         path_text = path_text[4:]
     drive, rest = os.path.splitdrive(path_text)
