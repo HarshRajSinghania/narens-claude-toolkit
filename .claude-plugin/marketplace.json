@@ -18,6 +18,11 @@
       "name": "decision-journal",
       "source": "./plugins/decision-journal",
       "description": "Use when the user wants to log a prediction or estimate about a dev or project decision, grade past predictions, or see how calibrated they are (for example 'log a prediction', 'grade my predictions', 'how calibrated am I?')."
+    },
+    {
+      "name": "rule-promoter",
+      "source": "./plugins/rule-promoter",
+      "description": "Use when the user wants rules in CLAUDE.md enforced with hooks, says Claude keeps ignoring a CLAUDE.md rule, or asks to turn CLAUDE.md rules into hooks (for example 'promote my CLAUDE.md rules to hooks' or 'make Claude stop editing migrations')."
     }
   ]
 }
