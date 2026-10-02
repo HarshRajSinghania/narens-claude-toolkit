@@ -12,6 +12,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -26,6 +27,16 @@ CANDIDATES = ("python3", "python", "py -3")
 
 class SettingsError(Exception):
     """The settings file cannot be merged safely."""
+
+
+def split_launcher(text, windows=None):
+    """Split a launcher string into argv. On Windows backslashes are path separators, not escapes."""
+    if windows is None:
+        windows = os.name == "nt"
+    if not windows:
+        return shlex.split(text)
+    return [part[1:-1] if len(part) > 1 and part[0] == part[-1] and part[0] in "\"'" else part
+            for part in shlex.split(text, posix=False)]
 
 
 def build_groups(launcher, pretool, stop, shell_form=False):
@@ -141,10 +152,14 @@ def apply(path, launcher, pretool, stop, shell_form=False):
     if before == after:
         return False
     path.parent.mkdir(parents=True, exist_ok=True)
+    if path.is_symlink():  # write through a symlink instead of replacing it with a regular file
+        path = Path(os.path.realpath(path))
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".settings-", suffix=".tmp")
     try:
         with os.fdopen(fd, "wb") as f:
             f.write(after)
+        if before is not None:
+            shutil.copymode(path, tmp)  # keep the file's permission bits
         os.replace(tmp, path)
     except BaseException:
         try:
@@ -195,14 +210,14 @@ def main(argv=None):
     if not (args.pretool or args.stop):
         print("error: pass --pretool and/or --stop", file=sys.stderr)
         return 2
-    launcher = shlex.split(args.launcher)
+    launcher = split_launcher(args.launcher)
     try:
         if args.cmd == "plan":
             print(plan(args.settings, launcher, args.pretool, args.stop, args.shell_form), end="")
         else:
             changed = apply(args.settings, launcher, args.pretool, args.stop, args.shell_form)
             print("settings.json updated." if changed else "No changes: settings.json already up to date.")
-    except SettingsError as exc:
+    except (SettingsError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     return 0

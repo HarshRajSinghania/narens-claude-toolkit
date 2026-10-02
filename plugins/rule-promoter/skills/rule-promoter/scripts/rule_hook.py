@@ -21,6 +21,8 @@ PATH_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 PATH_KEYS = ("file_path", "notebook_path")
 TEXT_KEYS = ("content", "file_content", "new_string", "new_content", "new_source")
 _ID = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
+MAX_TIMEOUT = 280  # seconds: the installed Stop hook allows 300
+GLOB_KEYS = ("globs", "allow_globs", "when_changed_globs")
 _NT = os.name == "nt"
 _CI = _NT or sys.platform == "darwin"  # case-insensitive file systems by default
 
@@ -98,22 +100,19 @@ def path_forms(path_text, project):
 
 
 def _collect(obj, keys):
-    found = []
-
-    def visit(node):
+    found, todo = [], [obj]
+    while todo:  # iterative, so deep nesting cannot hit the recursion limit and fail open
+        node = todo.pop()
         if isinstance(node, dict):
-            for key, value in node.items():
+            for key, value in reversed(list(node.items())):
                 if key in keys and isinstance(value, str):
                     found.append(value)
                 elif key in keys and isinstance(value, list):
                     found.extend(v for v in value if isinstance(v, str))
                 else:
-                    visit(value)
+                    todo.append(value)
         elif isinstance(node, list):
-            for item in node:
-                visit(item)
-
-    visit(obj)
+            todo.extend(reversed(node))
     return found
 
 
@@ -147,6 +146,15 @@ _FIELDS = {
 }
 
 
+def _glob_problem(glob):
+    """Why a glob would never match as its author expects, or None. Only * ** ? are supported."""
+    if any(ch in glob for ch in "[]{}"):
+        return "uses [ ] or { }, which are not supported (only *, ** and ?)"
+    if glob.startswith(("./", "/", ".\\", "\\")):
+        return "must be relative to the project, with no leading ./ or /"
+    return None
+
+
 def _validate_fields(label, rule, kind):
     errors = []
     for key, required in _FIELDS[kind]:
@@ -154,6 +162,11 @@ def _validate_fields(label, rule, kind):
         if problem:
             errors.append(f"{label}: {key} {problem}")
     if not errors:
+        for key in GLOB_KEYS:
+            for glob in rule.get(key) or []:
+                problem = _glob_problem(glob)
+                if problem:
+                    errors.append(f"{label}: {key} glob {glob!r} {problem}")
         for key in ("patterns", "except_patterns"):
             for pattern in rule.get(key) or []:
                 try:
@@ -165,9 +178,9 @@ def _validate_fields(label, rule, kind):
             errors.append(f"{label}: command is required")
         timeout = rule.get("timeout_seconds")
         if timeout is not None and not (
-            isinstance(timeout, (int, float)) and not isinstance(timeout, bool) and timeout > 0
+            isinstance(timeout, (int, float)) and not isinstance(timeout, bool) and 0 < timeout <= MAX_TIMEOUT
         ):
-            errors.append(f"{label}: timeout_seconds must be a positive number")
+            errors.append(f"{label}: timeout_seconds must be a number from 1 to {MAX_TIMEOUT}")
     return errors
 
 
@@ -199,7 +212,9 @@ def validate_rules(data):
         if not (isinstance(rule.get("message"), str) and rule["message"].strip()):
             errors.append(f"{label}: message is required")
         errors += _validate_fields(label, rule, kind)
-        if rule.get("enabled", True):
+        if "enabled" in rule and not isinstance(rule["enabled"], bool):
+            errors.append(f"{label}: enabled must be true or false")
+        if rule.get("enabled", True) is True:
             proof = rule.get("proof")
             if not (isinstance(proof, dict) and isinstance(proof.get("violation"), dict)
                     and isinstance(proof.get("pass"), dict)):
@@ -451,6 +466,7 @@ def decision(payload, rule, detail):
     reason = f"Rule {rule['id']}: {rule['message']}{source}"
     if payload.get("hook_event_name") == "Stop":
         return {"decision": "block", "reason": f"{reason}\n{detail}"}
+    reason = f"{reason} [{detail}]"
     return {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",

@@ -1,6 +1,7 @@
 import contextlib
 import io
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -287,6 +288,57 @@ class ReviewFixTests(unittest.TestCase):
         self.assertEqual(code, 0)
         hook = json.loads(self.path.read_text(encoding="utf-8"))["hooks"]["PreToolUse"][0]["hooks"][0]
         self.assertIn("$CLAUDE_PROJECT_DIR", hook["command"])
+
+
+class DeferredMinorTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path = Path(self.tmp.name) / ".claude" / "settings.json"
+        self.path.parent.mkdir(parents=True)
+
+    def run_cli(self, *argv):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = sm.main(list(argv))
+        return code, out.getvalue(), err.getvalue()
+
+    # M1: a Windows launcher path keeps its backslashes and its quoted spaces
+    def test_launcher_with_windows_path_is_split_correctly(self):
+        self.assertEqual(sm.split_launcher(r'"C:\Program Files\Python312\python.exe"', windows=True),
+                         [r"C:\Program Files\Python312\python.exe"])
+        self.assertEqual(sm.split_launcher(r"C:\Python312\python.exe -u", windows=True),
+                         [r"C:\Python312\python.exe", "-u"])
+        self.assertEqual(sm.split_launcher("py -3", windows=True), ["py", "-3"])
+        self.assertEqual(sm.split_launcher("'/opt/my python/bin/python3'", windows=False),
+                         ["/opt/my python/bin/python3"])
+
+    # M3: a write failure is a clean error, not a traceback
+    def test_write_failure_is_a_clean_error(self):
+        with mock.patch.object(sm.os, "replace", side_effect=PermissionError("locked")):
+            code, _, err = self.run_cli("apply", "--settings", str(self.path), "--launcher", "python3", "--pretool")
+        self.assertEqual(code, 2)
+        self.assertIn("error:", err)
+        self.assertEqual([p.name for p in self.path.parent.iterdir()], [])  # no temp file left behind
+
+    # M4: the file's permissions and a symlinked settings file survive the atomic write
+    @unittest.skipIf(os.name == "nt", "POSIX permission bits")
+    def test_file_mode_is_preserved(self):
+        self.path.write_text("{}", encoding="utf-8")
+        os.chmod(self.path, 0o640)
+        sm.apply(self.path, ["python3"], True, False)
+        self.assertEqual(os.stat(self.path).st_mode & 0o777, 0o640)
+
+    def test_symlinked_settings_file_is_written_through(self):
+        real = Path(self.tmp.name) / "shared-settings.json"
+        real.write_text("{}", encoding="utf-8")
+        try:
+            os.symlink(real, self.path)
+        except (OSError, NotImplementedError):
+            self.skipTest("cannot create a symlink here")
+        sm.apply(self.path, ["python3"], True, False)
+        self.assertTrue(self.path.is_symlink())
+        self.assertIn("rule_hook.py", real.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":
