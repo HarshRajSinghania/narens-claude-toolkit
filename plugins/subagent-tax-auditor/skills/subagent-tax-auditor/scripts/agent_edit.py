@@ -259,11 +259,13 @@ def cmd_plan(args):
 
 def cmd_apply(args):
     path = _resolve(args)
-    backup = apply_edit(path, _new_text(args, path), args.backup_dir or default_backup_dir(), args.agent)
+    backup_dir = Path(args.backup_dir) if args.backup_dir else default_backup_dir()
+    backup = apply_edit(path, _new_text(args, path), backup_dir, args.agent)
     if backup is None:
         print("No changes: the file already has these values.")
     else:
-        print(f"Updated {path}\nBackup: {backup}\nTo undo: agent_edit.py undo --agent {args.agent}")
+        undo_line = f'python "{Path(__file__).resolve()}" undo --agent {args.agent} --backup-dir "{backup_dir.resolve()}"'
+        print(f"Updated {path}\nBackup: {backup}\nTo undo: {undo_line}")
     return 0
 
 

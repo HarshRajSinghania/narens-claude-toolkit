@@ -239,6 +239,14 @@ class CliTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(self.path.read_text(encoding="utf-8"), AGENT)
 
+    def test_apply_prints_an_undo_command_that_works_from_anywhere(self):
+        code, out, _ = run_cli("apply", "--agent", "reviewer", "--model", "haiku", "--backup-dir", self.backups, *self.common())
+        self.assertEqual(code, 0)
+        line = next(l for l in out.splitlines() if l.startswith("To undo:"))
+        self.assertIn("--backup-dir", line)
+        self.assertIn(self.backups, line)
+        self.assertNotIn("--agents-dir", line)  # undo does not take it
+
     def test_errors_are_clean(self):
         for argv in (
             ["plan", "--agent", "nope", "--model", "sonnet", *self.common()],

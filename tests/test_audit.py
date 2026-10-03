@@ -555,5 +555,21 @@ class SnapshotCompareCliTests(CompareCase):
         self.assertTrue(err.startswith("error:"))
 
 
+class ShippedRatesTests(unittest.TestCase):
+    def test_shipped_rates_file_loads_and_is_dated(self):
+        rates = audit.load_rates()
+        self.assertTrue(rates["models"])
+        self.assertRegex(rates["as_of"], r"^\d{4}-\d{2}-\d{2}$")
+        self.assertTrue(rates.get("source", "").startswith("http"))
+
+    def test_models_seen_in_real_transcripts_have_rates(self):
+        rates = audit.load_rates()
+        for model in ("claude-sonnet-5", "claude-sonnet-4-6", "claude-haiku-4-5-20251001",
+                      "claude-sonnet-5-5", "claude-opus-5-5", "claude-opus-5"):
+            self.assertIsNotNone(audit.rate_for(rates, model), model)
+        self.assertEqual(audit.rate_for(rates, "claude-opus-5-5")["output"], 20)
+        self.assertEqual(audit.rate_for(rates, "claude-opus-5")["output"], 25)
+
+
 if __name__ == "__main__":
     unittest.main()
