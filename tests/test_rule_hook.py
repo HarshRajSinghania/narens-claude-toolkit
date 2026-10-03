@@ -751,5 +751,85 @@ class DeferredMinorTests(RuleCase):
         self.assertEqual(found_text, ["x", "x", "x"])
 
 
+
+class ShellNoiseTests(RuleCase):
+    def rule(self, **kw):
+        return make_rule("blocked_command", patterns=[r"\bgit\s+push\b.*--force\b"], **kw)
+
+    def test_comment_text_does_not_trigger_a_rule(self):
+        self.assertIsNone(self.hit(self.rule(), pre("Bash", command="echo done # never git push --force")))
+        self.assertIsNone(self.hit(self.rule(), pre("Bash", command="# git push --force\nls")))
+
+    def test_a_hash_that_is_not_a_comment_is_kept(self):
+        branch = make_rule("blocked_command", patterns=[r"feature#2"])
+        self.assertIsNotNone(self.hit(branch, pre("Bash", command="git checkout feature#2")))
+        self.assertIsNotNone(self.hit(self.rule(), pre("Bash", command='echo "a # b" && git push --force origin x')))
+        self.assertIsNotNone(self.hit(self.rule(), pre("Bash", command="echo ${#PATH}; git push --force origin x")))
+
+    def test_except_pattern_cannot_be_satisfied_by_a_comment(self):
+        rule = self.rule(except_patterns=["--force-with-lease"])
+        self.assertIsNotNone(self.hit(rule, pre("Bash", command="git push --force origin x # --force-with-lease")))
+
+    def test_heredoc_body_of_a_non_interpreter_is_ignored(self):
+        command = "git commit -m \"$(cat <<'EOF'\nExplain why we never git push --force\nEOF\n)\""
+        self.assertIsNone(self.hit(self.rule(), pre("Bash", command=command)))
+
+    def test_heredoc_fed_to_a_shell_or_interpreter_is_still_scanned(self):
+        for command in (
+            "bash <<EOF\ngit push --force origin x\nEOF",
+            "cat <<EOF | sh\ngit push --force origin x\nEOF",
+            "python3 - <<'PY'\nimport os; os.system('git push --force')\nPY",
+        ):
+            self.assertIsNotNone(self.hit(self.rule(), pre("Bash", command=command)), command)
+
+    def test_code_after_a_heredoc_is_still_scanned(self):
+        command = "cat <<EOF > notes.txt\nhello\nEOF\ngit push --force origin x"
+        self.assertIsNotNone(self.hit(self.rule(), pre("Bash", command=command)))
+
+    def test_an_unterminated_heredoc_does_not_hang_or_crash(self):
+        self.assertIsNone(self.hit(self.rule(), pre("Bash", command="cat <<EOF\nnever closed git push --force")))
+
+
+class RegexGuardTests(unittest.TestCase):
+    def errors(self, pattern):
+        return rule_hook.validate_rules({"version": 1, "rules": [make_rule("blocked_command", patterns=[pattern])]})
+
+    def test_nested_unbounded_repeats_are_refused(self):
+        for pattern in (r"(a+)+$", r"(\w+\s*)+x", r"(?:a*)*b", r"(x+x+)+y"):
+            self.assertTrue(any("exponential" in e for e in self.errors(pattern)), pattern)
+
+    def test_ordinary_patterns_are_accepted(self):
+        for pattern in (r"\bgit\s+push\b.*(?:--force\b|\s-[A-Za-z]*f[A-Za-z]*\b|\s\+\w)", r"console\.log\(",
+                        r"(?:foo|bar)+", r"\d{1,3}(?:,\d{3})*", r"^import os$", r"rm\s+-rf?\s+/"):
+            self.assertEqual(self.errors(pattern), [], pattern)
+
+
+class OutputDecodeTests(unittest.TestCase):
+    def test_utf8_output_decodes(self):
+        self.assertEqual(rule_hook._decode_output("café ✓".encode("utf-8")), "café ✓")
+
+    def test_console_codepage_is_used_when_the_output_is_not_utf8(self):
+        with mock.patch.object(rule_hook, "_console_encoding", return_value="cp437"):
+            self.assertEqual(rule_hook._decode_output("café".encode("cp437")), "café")
+
+    def test_undecodable_bytes_are_replaced_not_raised(self):
+        with mock.patch.object(rule_hook, "_console_encoding", return_value="ascii"):
+            self.assertIsInstance(rule_hook._decode_output(b"\xff\xfe bad"), str)
+
+
+class StopBudgetTests(RuleCase):
+    def test_stop_checks_share_one_time_budget(self):
+        slow = [make_rule("stop_check", id=f"slow-{n}", command=py("import time; time.sleep(5)"), timeout_seconds=280)
+                for n in (1, 2)]
+        err = io.StringIO()
+        started = time.monotonic()
+        with mock.patch.object(rule_hook, "TOTAL_STOP_BUDGET", 1), contextlib.redirect_stderr(err):
+            hit = rule_hook.evaluate(stop(), slow, self.project)
+        self.assertIsNone(hit)
+        self.assertLess(time.monotonic() - started, 4)
+        self.assertIn("timed out", err.getvalue())
+        self.assertIn("budget", err.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()
