@@ -64,13 +64,13 @@ Rule no-migration-edits: Migrations are generated. Create a new migration instea
 - A pattern that is too broad can block legitimate work (for example a `main` pattern also matches a branch named `main-menu`); the skill states the risk for each rule and adds exceptions where it matters.
 - Path matching is best effort: case-insensitive on Windows and macOS, and symlinks, junctions and Windows short names are resolved, but unusual aliases may still slip through.
 - `when_changed_globs` only sees uncommitted changes (renames count). If Claude commits before it stops, the check is skipped, so leave the globs out when that matters.
-- `except_patterns` exempt the whole command segment: matching text anywhere in it, even in a shell comment, lets the command through.
+- `except_patterns` exempt the whole command segment: matching text anywhere in the command part lets it through. Text in a shell `#` comment, or in a heredoc that is not fed to a shell or interpreter (a commit message, say), is ignored by every pattern, so it can neither trigger a rule nor excuse a command. A heredoc fed to `bash`, `sh`, `python` and the like is still scanned, because that text runs.
 - `banned_content` inspects the new text of each edit, so a banned string assembled across several edits is not caught.
 - Claude can still edit `.claude/rules.json`, `.claude/hooks/` and `.claude/settings.json`. Once you are happy with the setup, you can add a protect rule for those paths; it also blocks re-running this skill until you disable it.
 - If one rule in `rules.json` is invalid, the engine keeps enforcing the valid ones and warns about the bad one on every tool call.
 - The hook entries use exec-form `command` plus `args`. If your Claude Code version does not run them (hooks never fire although the self-test passes), the skill can write the one-line shell form instead (`--shell-form`).
-- A stop check's `timeout_seconds` is capped at 280, and several stop checks share one 300-second hook budget: if they are slow together, the hook can be cut off and the stop is allowed.
-- A regular expression that backtracks badly is not guarded against; keep patterns simple.
+- A stop check's `timeout_seconds` is capped at 280, and all stop checks in one Stop event share a 280-second budget (the installed hook allows 300). When it runs out, the remaining checks are skipped with a warning and the stop is allowed.
+- A pattern with a repeated group that itself repeats, such as `(a+)+`, is refused at load time because it can hang the hook. Other slow patterns are not detected, so keep patterns simple.
 - It does not measure which rules Claude actually breaks, and it does not re-sync automatically when CLAUDE.md changes: run it again.
 
 ## Turning it off

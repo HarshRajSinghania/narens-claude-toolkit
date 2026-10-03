@@ -9,6 +9,7 @@ All notable changes are recorded here. Format follows [Keep a Changelog](https:/
 - `rule-promoter` skill: turns the enforceable rules in CLAUDE.md into hooks (protected paths, blocked commands, banned content, must-pass-before-stopping), proves each rule blocks a violation, and installs them into `.claude/settings.json` after confirmation.
 
 ### Fixed
+- `rule-promoter` 0.1.2: shell `#` comments and the body of a heredoc that is not fed to a shell or interpreter (such as a commit message) no longer trigger or excuse a command rule; patterns with a repeated group that repeats (`(a+)+`) are refused because they can hang the hook; all stop checks share one 280-second budget, with the rest skipped and a warning when it runs out; command output in a legacy console code page is decoded instead of replaced.
 - `rule-promoter` 0.1.1: a deny message names the matched path or command; rules with a non-boolean `enabled`, globs that could never match (`[ab]`, `{a,b}`, leading `./` or `/`) or a `timeout_seconds` above 280 are refused instead of silently misbehaving; very deeply nested tool input is still checked; the settings helper keeps Windows launcher paths intact, keeps file permissions, writes through a symlinked `settings.json`, and reports a write failure as a clean error; the force-push example also catches `-fu` and `+main`.
 
 ## [0.1.2] - 2026-10-01

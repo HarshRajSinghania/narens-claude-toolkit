@@ -14,7 +14,14 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
+
+try:  # Python 3.11+
+    from re import _constants as _sre_const, _parser as _sre_parse
+except ImportError:  # Python 3.9 and 3.10
+    import sre_constants as _sre_const
+    import sre_parse as _sre_parse
 
 RULE_TYPES = ("protected_path", "blocked_command", "banned_content", "stop_check")
 PATH_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
@@ -22,6 +29,11 @@ PATH_KEYS = ("file_path", "notebook_path")
 TEXT_KEYS = ("content", "file_content", "new_string", "new_content", "new_source")
 _ID = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 MAX_TIMEOUT = 280  # seconds: the installed Stop hook allows 300
+TOTAL_STOP_BUDGET = MAX_TIMEOUT  # all stop checks in one Stop event share this many seconds
+_INTERPRETERS = frozenset((
+    "sh", "bash", "zsh", "dash", "ksh", "source", "eval", "xargs", "ssh", "python", "python3", "py",
+    "node", "perl", "ruby", "powershell", "pwsh", "cmd"))
+_HEREDOC = re.compile(r"<<-?[ \t]*(?:'([^']+)'|\"([^\"]+)\"|\\?([A-Za-z0-9_]+))")
 GLOB_KEYS = ("globs", "allow_globs", "when_changed_globs")
 _NT = os.name == "nt"
 _CI = _NT or sys.platform == "darwin"  # case-insensitive file systems by default
@@ -146,6 +158,35 @@ _FIELDS = {
 }
 
 
+def _nested_repeat(pattern):
+    """True when an unbounded repeat contains another one, as in (a+)+ (catastrophic backtracking)."""
+    try:
+        parsed = _sre_parse.parse(pattern)
+    except Exception:  # noqa: BLE001 - an invalid pattern is reported by re.compile
+        return False
+
+    def subs(value):
+        if isinstance(value, _sre_parse.SubPattern):
+            yield value
+        elif isinstance(value, (tuple, list)):
+            for item in value:
+                yield from subs(item)
+
+    def walk(node):
+        for op, av in node:
+            yield op, av
+            for sub in subs(av):
+                yield from walk(sub)
+
+    repeats = (_sre_const.MAX_REPEAT, _sre_const.MIN_REPEAT)
+
+    def unbounded(op, av):
+        return op in repeats and av[1] == _sre_const.MAXREPEAT
+
+    return any(unbounded(op, av) and any(unbounded(o, a) for o, a in walk(av[2]))
+               for op, av in walk(parsed))
+
+
 def _glob_problem(glob):
     """Why a glob would never match as its author expects, or None. Only * ** ? are supported."""
     if any(ch in glob for ch in "[]{}"):
@@ -173,6 +214,10 @@ def _validate_fields(label, rule, kind):
                     re.compile(pattern)
                 except re.error as exc:
                     errors.append(f"{label}: {key} has an invalid regular expression {pattern!r} ({exc})")
+                    continue
+                if _nested_repeat(pattern):
+                    errors.append(f"{label}: {key} pattern {pattern!r} may take exponential time "
+                                  "(a repeated group that itself repeats); simplify it")
     if kind == "stop_check":
         if not (isinstance(rule.get("command"), str) and rule["command"].strip()):
             errors.append(f"{label}: command is required")
@@ -228,12 +273,12 @@ def _matches_any(patterns, text):
     return any(re.search(p, text, re.MULTILINE) for p in patterns)
 
 
-def check_rule(rule, payload, project, simulate=False):
+def check_rule(rule, payload, project, simulate=False, deadline=None):
     """Return a short violation detail, or None when the payload is allowed."""
     event = payload.get("hook_event_name")
     kind = rule["type"]
     if kind == "stop_check":
-        return _stop_check(rule, payload, project, simulate) if event == "Stop" else None
+        return _stop_check(rule, payload, project, simulate, deadline) if event == "Stop" else None
     if event != "PreToolUse":
         return None
     tool = payload.get("tool_name")
@@ -260,9 +305,97 @@ def check_rule(rule, payload, project, simulate=False):
     return None
 
 
+def _strip_noise(command):
+    """Remove what a shell never runs as a command: unquoted # comments and the body of a heredoc
+    whose line has no shell or interpreter on it (for example the text of a commit message). A
+    heredoc fed to bash, sh, python and the like is kept, because that text does run. A heredoc
+    inside "$( ... )" is handled too, since that is how commit messages are usually written."""
+    out, cur, pending = [], [], []
+    state = {"i": 0, "line_start": 0}
+    quote, n = None, len(command)
+
+    def heredoc_here():
+        i = state["i"]
+        if not command.startswith("<<", i) or command.startswith("<<<", i):
+            return False
+        match = _HEREDOC.match(command, i)
+        if not match:
+            return False
+        eol = command.find("\n", i)
+        words = set(re.findall(r"[A-Za-z0-9_]+", command[state["line_start"]:n if eol == -1 else eol]))
+        pending.append((match.group(1) or match.group(2) or match.group(3), bool(words & _INTERPRETERS)))
+        out.append(match.group(0))
+        cur.append(match.group(0))
+        state["i"] = match.end()
+        return True
+
+    def newline_here():
+        out.append("\n")
+        i = state["i"] + 1
+        while pending:
+            delimiter, keep = pending.pop(0)
+            while i < n:
+                end = command.find("\n", i)
+                end = n if end == -1 else end
+                line = command[i:end]
+                i = min(end + 1, n)
+                if keep:
+                    out.append(line + "\n")
+                if line.strip() == delimiter:
+                    break
+        cur.clear()
+        state["i"], state["line_start"] = i, i
+
+    while state["i"] < n:
+        i = state["i"]
+        ch = command[i]
+        if quote:
+            if quote == '"' and heredoc_here():
+                continue
+            if ch == "\n":
+                newline_here()
+                continue
+            out.append(ch)
+            cur.append(ch)
+            if ch == "\\" and quote == '"' and i + 1 < n:
+                out.append(command[i + 1])
+                cur.append(command[i + 1])
+                i += 1
+            elif ch == quote:
+                quote = None
+            state["i"] = i + 1
+            continue
+        if ch == "\\" and i + 1 < n:
+            out.append(command[i:i + 2])
+            cur.append(command[i:i + 2])
+            state["i"] = i + 2
+            continue
+        if ch in "\"'":
+            quote = ch
+            out.append(ch)
+            cur.append(ch)
+            state["i"] = i + 1
+            continue
+        if ch == "#" and (not cur or cur[-1][-1] in " \t;&|("):
+            while i < n and command[i] != "\n":
+                i += 1
+            state["i"] = i
+            continue
+        if heredoc_here():
+            continue
+        if ch == "\n":
+            newline_here()
+            continue
+        out.append(ch)
+        cur.append(ch)
+        state["i"] = i + 1
+    return "".join(out)
+
+
 def split_segments(command):
     """Split a shell command into segments on &&, ||, ;, |, & and newlines (quotes respected)."""
     command = command.replace("\\\r\n", "").replace("\\\n", "")  # line continuations
+    command = _strip_noise(command)
     segments, buf, quote, i = [], [], None, 0
     while i < len(command):
         ch = command[i]
@@ -363,6 +496,29 @@ def _kill_tree(proc):
         pass
 
 
+def _console_encoding():
+    if os.name == "nt":
+        try:
+            import ctypes
+            return f"cp{ctypes.windll.kernel32.GetOEMCP()}"
+        except (AttributeError, ImportError, OSError):
+            return "cp437"
+    import locale
+    return locale.getpreferredencoding(False) or "utf-8"
+
+
+def _decode_output(data):
+    """Command output as text: UTF-8 when it is valid, else the console's own code page."""
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        pass
+    try:
+        return data.decode(_console_encoding(), errors="replace")
+    except LookupError:
+        return data.decode("utf-8", errors="replace")
+
+
 def _run_command(command, project, timeout):
     """Run a shell command, killing its whole process tree on timeout. Returns (code, output) or None."""
     options = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt"
@@ -378,11 +534,16 @@ def _run_command(command, project, timeout):
             _kill_tree(proc)
             return None
         sink.seek(0)
-        return proc.returncode, sink.read().decode("utf-8", errors="replace")
+        return proc.returncode, _decode_output(sink.read())
 
 
-def _stop_check(rule, payload, project, simulate):
+def _stop_check(rule, payload, project, simulate, deadline=None):
     if payload.get("stop_hook_active"):
+        return None
+    remaining = None if deadline is None else deadline - time.monotonic()
+    if remaining is not None and remaining <= 0 and not (simulate and "simulate_exit" in payload):
+        print(f"[rule_hook] stop check {rule['id']} skipped: the Stop hook's time budget is used up; "
+              "allowing the stop", file=sys.stderr)
         return None
     if simulate and "simulate_exit" in payload:
         return "the check failed (simulated)" if payload["simulate_exit"] else None
@@ -392,9 +553,13 @@ def _stop_check(rule, payload, project, simulate):
         if changed is not None and not any(glob_match(globs, p) for p in changed):
             return None
     command = rule["command"]
-    result = _run_command(command, project, rule.get("timeout_seconds", 120))
+    timeout = rule.get("timeout_seconds", 120)
+    if remaining is not None:
+        timeout = min(timeout, remaining)
+    result = _run_command(command, project, timeout)
     if result is None:
-        print(f"[rule_hook] stop check {rule['id']} timed out; allowing the stop", file=sys.stderr)
+        why = " (the shared Stop-hook budget ran out)" if remaining is not None and timeout == remaining else ""
+        print(f"[rule_hook] stop check {rule['id']} timed out{why}; allowing the stop", file=sys.stderr)
         return None
     code, output = result
     if code == 0:
@@ -452,10 +617,11 @@ def load_rules(path, strict=True):
 
 def evaluate(payload, rules, project, simulate=False):
     """The first enabled rule that the payload violates, as (rule, detail), else None."""
+    deadline = time.monotonic() + TOTAL_STOP_BUDGET if payload.get("hook_event_name") == "Stop" else None
     for rule in rules:
         if not rule.get("enabled", True):
             continue
-        detail = check_rule(rule, payload, project, simulate)
+        detail = check_rule(rule, payload, project, simulate, deadline)
         if detail is not None:
             return rule, detail
     return None
