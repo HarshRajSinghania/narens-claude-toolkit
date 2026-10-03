@@ -120,7 +120,8 @@ def load_settings(path):
     try:
         data = json.loads(raw_text(path), object_pairs_hook=_no_duplicates)
     except ValueError as exc:
-        raise SettingsError(f"{path} is not valid JSON ({exc}); fix it first") from None
+        raise SettingsError(f"{path} is not valid JSON ({exc}); fix it first. Claude Code settings files are "
+                            "strict JSON: comments and trailing commas are errors there too") from None
     if not isinstance(data, dict):
         raise SettingsError(f"{path} must contain a JSON object")
     return data

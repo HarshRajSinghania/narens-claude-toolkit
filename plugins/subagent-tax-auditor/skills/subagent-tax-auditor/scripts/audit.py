@@ -278,7 +278,8 @@ def build_report(sums, rates, quality, selectors, show_descriptions=False, today
             row = rows.setdefault((s["type"], model), {
                 "type": s["type"], "model": model, "spawns": 0, "messages": 0,
                 "tokens": dict.fromkeys(KINDS, 0), "fixed": [], "descriptions": set()})
-            row["spawns"] += 1
+            if model == s["first_model"]:
+                row["spawns"] += 1  # a run counts once, on the model it started with
             row["messages"] += s["models"][model]
             for kind in KINDS:
                 row["tokens"][kind] += tokens[kind]
@@ -467,8 +468,10 @@ def add_selectors(parser):
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--project", help="project directory (default: the current directory)")
     group.add_argument("--all", action="store_true", help="every project")
-    parser.add_argument("--since", help="only files that started on or after YYYY-MM-DD")
-    parser.add_argument("--until", help="only files that started on or before YYYY-MM-DD")
+    parser.add_argument("--since", help="only files that started on or after YYYY-MM-DD (a UTC date, taken from "
+                                        "the file's first timestamp)")
+    parser.add_argument("--until", help="only files that started on or before YYYY-MM-DD (a UTC date, taken from "
+                                        "the file's first timestamp)")
     parser.add_argument("--projects-dir", help="transcripts directory (default: $CLAUDE_CONFIG_DIR/projects or ~/.claude/projects)")
     parser.add_argument("--rates", help="rates file (default: rates.json next to scripts/)")
 
@@ -507,7 +510,7 @@ def cmd_snapshot(args):
               "(use --all, or --project PATH).")
         return 0
     out = Path(args.out)
-    out.write_text(json.dumps(snapshot_data(sums, rates, selectors), indent=2) + "\n", encoding="utf-8")
+    out.write_bytes((json.dumps(snapshot_data(sums, rates, selectors), indent=2) + "\n").encode("utf-8"))
     print(f"Snapshot saved to {out}")
     return 0
 

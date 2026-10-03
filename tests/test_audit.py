@@ -668,5 +668,42 @@ class FinalCompareTests(CompareCase):
         self.assertEqual(entry["after"]["spawns"], 6)
 
 
+
+class SmallBatchTests(CompareCase):
+    # LF line endings for every file the audit writes, on every platform
+    def test_snapshot_file_uses_lf_line_endings(self):
+        self.build(self.spawns("reviewer", "claude-sonnet-5-5", 6, BEFORE))
+        out = self.root / "snap.json"
+        code, _, _ = run_cli("snapshot", "--out", str(out), "--projects-dir", str(self.projects),
+                             "--rates", str(self.rates_path), "--project", str(self.project))
+        self.assertEqual(code, 0)
+        self.assertNotIn(b"\r\n", out.read_bytes())
+
+    # the date filters are UTC dates, and the help says so
+    def test_date_filter_help_says_utc(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            with self.assertRaises(SystemExit):
+                audit.main(["report", "--help"])
+        text = " ".join(out.getvalue().split())
+        self.assertIn("UTC", text)
+
+    # a run that switches models is one spawn, counted where it started
+    def test_a_model_switching_run_is_one_spawn(self):
+        records = [tb.assistant("m1", model="claude-opus-5-5", read=1000, out=10),
+                   tb.assistant("m2", model="claude-haiku-4-5", read=2000, out=20)]
+        tb.add_session(self.projects, self.slug, "s1", records)
+        quality = audit.new_quality()
+        dirs = audit.project_dirs(self.projects, project=str(self.project))
+        sums = [audit.summarize(u, RATES) for u in audit.load_units(dirs, None, None, quality)]
+        report = audit.build_report(sums, RATES, quality, {})
+        rows = {r["model"]: r for r in report["rows"]}
+        self.assertEqual(rows["claude-opus-5-5"]["spawns"], 1)
+        self.assertEqual(rows["claude-haiku-4-5"]["spawns"], 0)
+        self.assertEqual(sum(r["spawns"] for r in report["rows"]), report["quality"]["sessions"])
+        self.assertEqual(rows["claude-haiku-4-5"]["messages"], 1)
+        self.assertEqual(rows["claude-haiku-4-5"]["tokens"]["output"], 20)
+
+
 if __name__ == "__main__":
     unittest.main()

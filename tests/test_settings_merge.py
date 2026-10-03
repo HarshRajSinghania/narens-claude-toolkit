@@ -341,5 +341,19 @@ class DeferredMinorTests(unittest.TestCase):
         self.assertIn("rule_hook.py", real.read_text(encoding="utf-8"))
 
 
+
+class StrictJsonHintTests(unittest.TestCase):
+    def test_comment_in_settings_explains_that_claude_code_rejects_it_too(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp, "settings.json")
+            path.write_text('{\n  // keep me\n  "model": "opus"\n}\n', encoding="utf-8")
+            out, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                code = sm.main(["plan", "--settings", str(path), "--launcher", "python3", "--pretool"])
+            self.assertEqual(code, 2)
+            self.assertIn("strict JSON", err.getvalue())
+            self.assertIn("comments", err.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()
