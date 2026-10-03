@@ -261,7 +261,11 @@ class BannedContentTests(RuleCase):
 
 
 class RealPayloadTests(RuleCase):
-    """The fixtures are real payloads captured from Claude Code (see Task 1)."""
+    """Real payloads captured from Claude Code, for Write, Edit, Bash and Stop (tests/fixtures/rule_hook/).
+
+    MultiEdit and NotebookEdit have no capture yet; their tests above use synthetic payloads
+    (see issue #4).
+    """
 
     def load(self, name):
         return json.loads(fixture_text(name, self.project))
