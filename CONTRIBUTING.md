@@ -18,3 +18,9 @@ python scripts/validate.py
 ```
 
 CI runs the same two commands. Conventions are in [docs/conventions.md](docs/conventions.md). Never edit the README catalog by hand; run `python scripts/build_catalog.py`.
+
+## Known issues and deferred work
+
+Every skill gets a final review before it is merged. Anything the review finds that is small and not worth blocking the release becomes a GitHub issue labelled `deferred-minor` (plus the skill's name, and `good first issue` when it is a self-contained change), instead of living only in someone's notes. Look there first if you want to help: [open deferred minors](https://github.com/NarenDawar/narens-claude-skills/issues?q=is%3Aissue+is%3Aopen+label%3Adeferred-minor).
+
+Each issue says what is wrong, where in the code, a failing scenario or evidence, and an idea for the fix. To pick one up, comment on it, then follow "Before opening a PR" above. Fixes start with a test that fails for the reason the issue describes.
