@@ -65,7 +65,7 @@ Before it edits, it saves a snapshot of the per-type numbers. Later, `compare` s
 ## How it works
 
 - Two small stdlib scripts do all the measuring and editing: `audit.py` (read-only) and `agent_edit.py`. Claude does the explaining and the judgment; the scripts do the arithmetic.
-- A transcript message can span several lines, so each message id is counted once at its largest usage. Without that, usage is overcounted.
+- A transcript message can span several lines, so each message id is counted once at its largest usage. A resumed session also copies earlier history into a new file, so each message id is counted once across files too (on the author's machine about 2% of messages were copies). Without that, usage is overcounted.
 - Prices come from `rates.json`, dated and with its source. A model with no price shows `no rate` and is left out of cost totals, never guessed.
 
 ## Limits

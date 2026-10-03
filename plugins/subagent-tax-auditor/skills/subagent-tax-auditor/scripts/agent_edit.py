@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import sys
 import tempfile
@@ -198,16 +199,23 @@ def undo(agent, backup_dir):
     if not _NAME.match(agent):
         raise AgentError(f"{agent!r} is not a usable agent name")
     backup_dir = Path(backup_dir)
-    metas = sorted(backup_dir.glob(f"{agent}.*.json")) if backup_dir.is_dir() else []
+    record = re.compile(re.escape(agent) + r"\.\d{8}T\d{12}Z-\d{3}\.json")  # exactly this agent's records
+    metas = sorted(p for p in backup_dir.iterdir() if record.fullmatch(p.name)) if backup_dir.is_dir() else []
     if not metas:
         raise AgentError(f"no backup found for {agent!r} in {backup_dir}")
     meta_path = metas[-1]
-    meta = json.loads(meta_path.read_text(encoding="utf-8"))
-    target = Path(meta["path"])
-    if not target.exists() or _sha(target.read_bytes()) != meta["after_sha256"]:
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        target, backup_name, after_sha = Path(meta["path"]), meta["backup"], meta["after_sha256"]
+        if meta["agent"] != agent:
+            raise KeyError("agent")
+    except (ValueError, KeyError, TypeError):
+        raise AgentError(f"the backup record {meta_path} is damaged; restore the file by hand from "
+                         f"the .bak next to it") from None
+    if not target.exists() or _sha(target.read_bytes()) != after_sha:
         raise AgentError(f"{target} has changed since the apply; not restoring over your later edits "
-                         f"(the original is in {backup_dir / meta['backup']})")
-    _write_atomic(target, (backup_dir / meta["backup"]).read_bytes())
+                         f"(the original is in {backup_dir / backup_name})")
+    _write_atomic(target, (backup_dir / backup_name).read_bytes())
     meta_path.rename(meta_path.with_suffix(".undone"))
     return target
 
@@ -215,7 +223,13 @@ def undo(agent, backup_dir):
 # --- command line --------------------------------------------------------------------------
 
 def default_dirs():
-    return [Path.cwd() / ".claude" / "agents", Path.home() / ".claude" / "agents"]
+    base = os.environ.get("CLAUDE_CONFIG_DIR")
+    return [Path.cwd() / ".claude" / "agents", (Path(base) if base else Path.home() / ".claude") / "agents"]
+
+
+def _quote(text):
+    """Quote one argument for the shell the user is most likely running."""
+    return f'"{text}"' if os.name == "nt" else shlex.quote(text)
 
 
 def default_backup_dir():
@@ -264,7 +278,8 @@ def cmd_apply(args):
     if backup is None:
         print("No changes: the file already has these values.")
     else:
-        undo_line = f'python "{Path(__file__).resolve()}" undo --agent {args.agent} --backup-dir "{backup_dir.resolve()}"'
+        undo_line = (f"{_quote(sys.executable)} {_quote(str(Path(__file__).resolve()))} "
+                     f"undo --agent {args.agent} --backup-dir {_quote(str(backup_dir.resolve()))}")
         print(f"Updated {path}\nBackup: {backup}\nTo undo: {undo_line}")
     return 0
 

@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -189,7 +190,7 @@ class RatesTests(TempCase):
         rates = {"models": {"claude-sonnet": {"input": 1}, "claude-sonnet-5-5": {"input": 2}}}
         self.assertEqual(audit.rate_for(rates, "claude-sonnet-5-5")["input"], 2)
         self.assertEqual(audit.rate_for(rates, "claude-sonnet-5-5-20260101")["input"], 2)
-        self.assertEqual(audit.rate_for(rates, "claude-sonnet-4")["input"], 1)
+        self.assertIsNone(audit.rate_for(rates, "claude-sonnet-4"))  # only a date suffix shares a price
         self.assertIsNone(audit.rate_for(rates, "claude-mystery-1"))
 
     def test_load_rates_validates(self):
@@ -569,6 +570,102 @@ class ShippedRatesTests(unittest.TestCase):
             self.assertIsNotNone(audit.rate_for(rates, model), model)
         self.assertEqual(audit.rate_for(rates, "claude-opus-5-5")["output"], 20)
         self.assertEqual(audit.rate_for(rates, "claude-opus-5")["output"], 25)
+
+
+
+class FinalReviewTests(ReportCase):
+    # F0: a resumed session copies earlier history into a new file; each message id counts once
+    def test_resumed_session_copy_counts_each_message_once(self):
+        slug = audit.slug_for(self.root / "resume")
+        first = [tb.assistant("r1", out=100, ts="2026-10-01T10:00:00.000Z"), tb.assistant("r2", out=200, ts="2026-10-01T10:05:00.000Z")]
+        copy = [tb.user("2026-10-02T09:00:00.000Z"), tb.assistant("r1", out=100, ts="2026-10-01T10:00:00.000Z"),
+                tb.assistant("r2", out=200, ts="2026-10-01T10:05:00.000Z"), tb.assistant("r3", out=50, ts="2026-10-02T09:01:00.000Z")]
+        tb.write_jsonl(self.projects / slug / "orig.jsonl", [tb.user("2026-10-01T10:00:00.000Z")] + first)
+        tb.write_jsonl(self.projects / slug / "resumed.jsonl", copy)
+        quality = audit.new_quality()
+        units = audit.load_units(audit.project_dirs(self.projects, project=str(self.root / "resume")), None, None, quality)
+        total_out = sum(m["tokens"]["output"] for u in units for m in u["messages"])
+        self.assertEqual(total_out, 350)  # not 650
+
+    def test_a_copied_message_belongs_to_the_earlier_file(self):
+        slug = audit.slug_for(self.root / "resume2")
+        tb.write_jsonl(self.projects / slug / "orig.jsonl", [tb.user("2026-10-01T10:00:00.000Z"), tb.assistant("r1", out=100, ts="2026-10-01T10:00:00.000Z")])
+        tb.write_jsonl(self.projects / slug / "later.jsonl", [tb.user("2026-10-03T10:00:00.000Z"), tb.assistant("r1", out=100, ts="2026-10-01T10:00:00.000Z")])
+        quality = audit.new_quality()
+        units = audit.load_units(audit.project_dirs(self.projects, project=str(self.root / "resume2")), None, None, quality)
+        self.assertEqual([u["start"][:10] for u in units], ["2026-10-01"])  # the later copy owns nothing and is dropped
+
+    # F1: a model that is not listed must not be priced at an older release's rate
+    def test_unlisted_point_release_has_no_rate_but_a_date_suffix_still_matches(self):
+        rates = {"models": {"claude-opus-5": {"input": 1}, "claude-haiku-4-5": {"input": 2}}}
+        self.assertIsNone(audit.rate_for(rates, "claude-opus-5-6"))
+        self.assertIsNone(audit.rate_for(rates, "claude-opus-50"))
+        self.assertEqual(audit.rate_for(rates, "claude-haiku-4-5-20251001")["input"], 2)
+        self.assertEqual(audit.rate_for(rates, "claude-opus-5")["input"], 1)
+
+
+class FinalCompareTests(CompareCase):
+    # F2: the 5-spawn rule counts the spawns a cost median rests on
+    def test_cost_verdict_needs_enough_priced_spawns(self):
+        self.build(self.spawns("reviewer", "claude-sonnet-5-5", 6, BEFORE)
+                   + self.spawns("reviewer", "claude-mystery-1", 5, AFTER)
+                   + self.spawns("reviewer", "claude-haiku-4-5", 1, AFTER))
+        verdict = self.entry(self.snapshot_and_compare()[1], "reviewer")["verdict"]
+        self.assertIn("median tokens per spawn", verdict)
+        self.assertNotIn("median cost per spawn", verdict)
+
+    # F3: transcripts do not record effort, so an effort-only edit cannot be judged
+    def test_unchanged_model_verdict_says_effort_is_not_measured(self):
+        self.build(self.spawns("reviewer", "claude-sonnet-5-5", 6, BEFORE) + self.spawns("reviewer", "claude-sonnet-5-5", 6, AFTER))
+        verdict = self.entry(self.snapshot_and_compare()[1], "reviewer")["verdict"]
+        self.assertIn("effort", verdict)
+        self.assertNotIn("not the edit", verdict)
+
+    # F5: a snapshot without --project remembers the project it was taken in
+    def test_snapshot_without_project_stores_the_current_directory(self):
+        self.build(self.spawns("reviewer", "claude-sonnet-5-5", 6, BEFORE))
+        out = self.root / "snap.json"
+        proj = self.project
+        proj.mkdir(exist_ok=True)
+        cwd = os.getcwd()
+        os.chdir(proj)
+        try:
+            code, _, _ = run_cli("snapshot", "--out", str(out), "--projects-dir", str(self.projects), "--rates", str(self.rates_path))
+        finally:
+            os.chdir(cwd)
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out.read_text(encoding="utf-8"))["selectors"]["project"], os.path.abspath(proj))
+
+    def test_snapshot_of_a_project_with_no_transcripts_writes_nothing(self):
+        self.projects.mkdir(parents=True)
+        out = self.root / "snap.json"
+        code, stdout, _ = run_cli("snapshot", "--out", str(out), "--projects-dir", str(self.projects),
+                                  "--rates", str(self.rates_path), "--project", str(self.root / "nowhere"))
+        self.assertEqual(code, 0)
+        self.assertIn("No transcripts found", stdout)
+        self.assertFalse(out.exists())
+
+    # F6: compare really reads the project saved in the snapshot, not the current directory's
+    def test_compare_uses_the_snapshot_project_from_another_directory(self):
+        self.build(self.spawns("reviewer", "claude-sonnet-5-5", 6, BEFORE))
+        out = self.root / "snap.json"
+        run_cli("snapshot", "--out", str(out), "--projects-dir", str(self.projects), "--rates", str(self.rates_path),
+                "--project", str(self.project))
+        future = "2999-01-01T00:00:00.000Z"
+        self.build(self.spawns("reviewer", "claude-haiku-4-5", 6, future))
+        other = self.root / "other-cwd"
+        other.mkdir()
+        cwd = os.getcwd()
+        os.chdir(other)
+        try:
+            code, stdout, _ = run_cli("compare", "--snapshot", str(out), "--projects-dir", str(self.projects),
+                                      "--rates", str(self.rates_path), "--json")
+        finally:
+            os.chdir(cwd)
+        self.assertEqual(code, 0)
+        entry = next(t for t in json.loads(stdout)["types"] if t["type"] == "reviewer")
+        self.assertIsNotNone(entry["after"])
+        self.assertEqual(entry["after"]["spawns"], 6)
 
 
 if __name__ == "__main__":

@@ -265,5 +265,65 @@ class CliTests(unittest.TestCase):
         self.assertIn("error:", err)
 
 
+
+class FinalReviewTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.agents = Path(self.tmp.name, "agents")
+        self.agents.mkdir()
+        self.backups = Path(self.tmp.name, "backups")
+
+    def make(self, name, model="opus"):
+        path = self.agents / f"{name}.md"
+        path.write_bytes(f"---\nname: {name}\ndescription: d\nmodel: {model}\n---\nbody\n".encode("utf-8"))
+        return path
+
+    # F4: the printed undo line runs as printed (and uses the interpreter that ran apply)
+    def test_the_printed_undo_line_runs_as_printed(self):
+        import subprocess
+        path = self.make("reviewer")
+        before = path.read_bytes()
+        code, out, _ = run_cli("apply", "--agent", "reviewer", "--model", "haiku", "--agents-dir", str(self.agents),
+                               "--backup-dir", str(self.backups))
+        self.assertEqual(code, 0)
+        self.assertNotEqual(path.read_bytes(), before)
+        line = next(l for l in out.splitlines() if l.startswith("To undo:"))[len("To undo: "):]
+        self.assertIn(sys.executable, line)
+        done = subprocess.run(line, shell=True, cwd=self.tmp.name, capture_output=True, timeout=60)
+        self.assertEqual(done.returncode, 0, done.stderr.decode("utf-8", "replace"))
+        self.assertEqual(path.read_bytes(), before)
+
+    # F7: undo only considers backups of that exact agent, even when names share a dotted prefix
+    def test_undo_does_not_touch_an_agent_whose_name_extends_this_one(self):
+        code_md, v2 = self.make("code"), self.make("code.v2")
+        for name in ("code", "code.v2"):
+            run_cli("apply", "--agent", name, "--model", "haiku", "--agents-dir", str(self.agents), "--backup-dir", str(self.backups))
+        ae.undo("code", self.backups)
+        self.assertIn("model: opus", code_md.read_text(encoding="utf-8"))
+        self.assertIn("model: haiku", v2.read_text(encoding="utf-8"))  # untouched
+
+    # F8: a damaged backup record is a clean error, not a traceback
+    def test_corrupt_backup_record_is_a_clean_error(self):
+        self.make("reviewer")
+        run_cli("apply", "--agent", "reviewer", "--model", "haiku", "--agents-dir", str(self.agents), "--backup-dir", str(self.backups))
+        meta = next(self.backups.glob("reviewer.*.json"))
+        meta.write_text("{truncated", encoding="utf-8")
+        code, _, err = run_cli("undo", "--agent", "reviewer", "--backup-dir", str(self.backups))
+        self.assertEqual(code, 2)
+        self.assertTrue(err.startswith("error:"))
+        meta.write_text("{}", encoding="utf-8")
+        code, _, err = run_cli("undo", "--agent", "reviewer", "--backup-dir", str(self.backups))
+        self.assertEqual(code, 2)
+
+    # F11: the user-level agents directory follows CLAUDE_CONFIG_DIR like audit.py does
+    def test_default_agents_dir_follows_claude_config_dir(self):
+        with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(Path(self.tmp.name, "cfg"))}):
+            self.assertEqual(ae.default_dirs()[1], Path(self.tmp.name, "cfg") / "agents")
+        env = {k: v for k, v in os.environ.items() if k != "CLAUDE_CONFIG_DIR"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            self.assertEqual(ae.default_dirs()[1], Path.home() / ".claude" / "agents")
+
+
 if __name__ == "__main__":
     unittest.main()

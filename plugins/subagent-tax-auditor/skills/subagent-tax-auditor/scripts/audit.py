@@ -116,7 +116,8 @@ def read_messages(path, quality):
                 quality["lines_without_usage"] += 1
                 continue
             mid = message.get("id")
-            if not isinstance(mid, str) or not mid:
+            real_id = isinstance(mid, str) and bool(mid)
+            if not real_id:
                 anonymous += 1
                 mid = f"line-{anonymous}"
             tokens = usage_counts(message["usage"])
@@ -125,7 +126,8 @@ def read_messages(path, quality):
                 for kind in KINDS:
                     seen[kind] = max(seen[kind], tokens[kind])
             else:
-                by_id[mid] = {"model": model if isinstance(model, str) and model else "unknown", "tokens": tokens}
+                by_id[mid] = {"id": mid if real_id else None,
+                              "model": model if isinstance(model, str) and model else "unknown", "tokens": tokens}
                 order.append(mid)
     return start, [by_id[i] for i in order]
 
@@ -138,14 +140,31 @@ def read_meta(path):
     return data if isinstance(data, dict) else None
 
 
-def _unit(kind, path, description, since, until, quality):
+def _unit(kind, path, description, quality):
     start, messages = read_messages(path, quality)
     if not messages or start is None:
         return None
-    day = start[:10]
-    if (since and day < since) or (until and day > until):
-        return None
     return {"type": kind, "start": start, "messages": messages, "description": description}
+
+
+def _dedupe_across_files(units):
+    """A resumed session copies earlier history into a new file: keep each message id once, in the
+    file that started first (ties go to the earlier file in scan order)."""
+    owner = {}
+    for index, unit in enumerate(units):
+        for message in unit["messages"]:
+            if message["id"] is None:
+                continue
+            best = owner.get(message["id"])
+            if best is None or (unit["start"], index) < best:
+                owner[message["id"]] = (unit["start"], index)
+    kept = []
+    for index, unit in enumerate(units):
+        unit["messages"] = [m for m in unit["messages"]
+                            if m["id"] is None or owner[m["id"]] == (unit["start"], index)]
+        if unit["messages"]:
+            kept.append(unit)
+    return kept
 
 
 def load_units(dirs, since, until, quality):
@@ -153,7 +172,7 @@ def load_units(dirs, since, until, quality):
     units = []
     for pdir in dirs:
         for session in sorted(pdir.glob("*.jsonl")):
-            unit = _unit("main", session, "", since, until, quality)
+            unit = _unit("main", session, "", quality)
             if unit:
                 units.append(unit)
         for subdir in sorted(p / "subagents" for p in pdir.iterdir() if (p / "subagents").is_dir()):
@@ -164,10 +183,12 @@ def load_units(dirs, since, until, quality):
                     kind = "unknown"
                     quality["subagents_without_meta"] += 1
                 description = meta.get("description", "") if meta else ""
-                unit = _unit(kind, agent, description if isinstance(description, str) else "", since, until, quality)
+                unit = _unit(kind, agent, description if isinstance(description, str) else "", quality)
                 if unit:
                     units.append(unit)
-    return units
+    units = _dedupe_across_files(units)
+    return [u for u in units
+            if not ((since and u["start"][:10] < since) or (until and u["start"][:10] > until))]
 
 
 # --- rates and cost ------------------------------------------------------------------------
@@ -195,8 +216,12 @@ def rate_for(rates, model):
     models = rates["models"]
     if model in models:
         return models[model]
-    prefixes = [name for name in models if model.startswith(name)]
-    return models[max(prefixes, key=len)] if prefixes else None
+    # Only a dated build of a listed model ("<id>-20251001") shares its price. A newer point release
+    # such as claude-opus-5-6 must not inherit claude-opus-5's price: it gets "no rate" instead.
+    for name in sorted(models, key=len, reverse=True):
+        if re.fullmatch(re.escape(name) + r"-\d{8}", model):
+            return models[name]
+    return None
 
 
 def cost_of(tokens, rate):
@@ -362,6 +387,7 @@ def type_stats(sums):
             "fixed_median": statistics.median([s["fixed"] for s in items]),
             "tokens_median": statistics.median([sum(s["tokens"].values()) for s in items]),
             "cost_median": statistics.median(costs) if costs else None,
+            "cost_spawns": len(costs),
         }
     return stats
 
@@ -385,10 +411,13 @@ def verdict(before, after):
         return (f"not enough data (need {MIN_SPAWNS}+ spawns on each side; "
                 f"{before['spawns']} before, {after['spawns']} after)")
     if before["models"] == after["models"]:
-        return "model unchanged; any difference is the mix of tasks, not the edit"
+        return ("model unchanged; transcripts do not record effort, so this cannot show the effect of an "
+                "effort-only edit, and any difference is also the mix of tasks")
     key, label = "cost_median", "cost"
-    if before["cost_median"] is None or after["cost_median"] is None:
-        key, label = "tokens_median", "tokens"
+    for side in (before, after):  # a cost median must rest on enough priced spawns too
+        priced = side.get("cost_spawns", side["spawns"] if side["cost_median"] is not None else 0)
+        if side["cost_median"] is None or priced < MIN_SPAWNS:
+            key, label = "tokens_median", "tokens"
     if not before[key]:
         return "cannot compare: the earlier median is zero"
     change = (after[key] - before[key]) / before[key] * 100
@@ -455,7 +484,7 @@ def gather(args, project=None, everything=None):
     quality = new_quality()
     dirs = project_dirs(projects_dir(args.projects_dir), project, everything)
     sums = [summarize(u, rates) for u in load_units(dirs, args.since, args.until, quality)]
-    selectors = {"project": os.path.abspath(project) if project else None, "all": bool(everything),
+    selectors = {"project": None if everything else os.path.abspath(project or os.getcwd()), "all": bool(everything),
                  "since": args.since, "until": args.until}
     return sums, quality, selectors, rates, bool(dirs)
 
@@ -472,7 +501,11 @@ def cmd_report(args):
 
 
 def cmd_snapshot(args):
-    sums, _, selectors, rates, _ = gather(args)
+    sums, _, selectors, rates, found = gather(args)
+    if not found:
+        print(f"No transcripts found for {selectors['project']}; no snapshot written "
+              "(use --all, or --project PATH).")
+        return 0
     out = Path(args.out)
     out.write_text(json.dumps(snapshot_data(sums, rates, selectors), indent=2) + "\n", encoding="utf-8")
     print(f"Snapshot saved to {out}")
