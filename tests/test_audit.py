@@ -263,5 +263,165 @@ class RealShapeTests(unittest.TestCase):
             self.assertGreater(sum(m["tokens"]["output"] + m["tokens"]["cache_read"] for m in unit["messages"]), 0)
 
 
+import contextlib
+import io
+
+
+def run_cli(*argv):
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        code = audit.main(list(argv))
+    return code, out.getvalue(), err.getvalue()
+
+
+class ReportCase(TempCase):
+    """main: one opus message; general-purpose: two sonnet runs; Explore: one run on an unrated model."""
+
+    def setUp(self):
+        super().setUp()
+        self.project = self.root / "proj"
+        self.slug = audit.slug_for(self.project)
+        self.rates_path = self.root / "rates.json"
+        self.rates_path.write_text(json.dumps(RATES), encoding="utf-8")
+        gp = lambda n: {"id": f"gp{n}", "type": "general-purpose", "description": "a task", "records": [  # noqa: E731
+            tb.assistant(f"g{n}a", read=1_000_000, write5=500_000, out=1_000, sidechain=True),
+            tb.assistant(f"g{n}b", read=1_500_000, out=1_000, sidechain=True)]}
+        explore = {"id": "ex1", "type": "Explore", "records": [
+            tb.assistant("e1", model="claude-mystery-1", read=100, out=500, sidechain=True)]}
+        tb.add_session(self.projects, self.slug, "s1",
+                       [tb.assistant("m1", model="claude-opus-5-5", write5=2_000_000, out=10_000)],
+                       subagents=[gp(1), gp(2), explore])
+        tb.add_session(self.projects, self.slug, "old", [tb.assistant("o1", ts="2026-09-01T10:00:00.000Z", out=1)])
+
+    def report(self, **kw):
+        quality = audit.new_quality()
+        dirs = audit.project_dirs(self.projects, project=str(self.project))
+        units = audit.load_units(dirs, kw.get("since"), kw.get("until"), quality)
+        sums = [audit.summarize(u, RATES) for u in units]
+        return audit.build_report(sums, RATES, quality, {"project": str(self.project)},
+                                  show_descriptions=kw.get("show", False), today=date(2026, 10, 3))
+
+    def row(self, report, kind):
+        return next(r for r in report["rows"] if r["type"] == kind)
+
+
+class ReportTests(ReportCase):
+    def test_rows_costs_and_shares(self):
+        report = self.report(since="2026-10-01")
+        main = self.row(report, "main")
+        self.assertAlmostEqual(main["cost"], 2_000_000 * 18.75 / 1e6 + 10_000 * 75 / 1e6)  # 38.25
+        gp = self.row(report, "general-purpose")
+        self.assertEqual((gp["spawns"], gp["messages"]), (2, 4))
+        self.assertAlmostEqual(gp["cost"], 2 * (0.3 + 1.875 + 0.015 + 0.45 + 0.015))  # 5.31
+        self.assertEqual(gp["fixed_context_median"], 1_500_000)
+        self.assertEqual(gp["tokens"]["output"], 4_000)
+        total = 38.25 + 5.31
+        self.assertAlmostEqual(report["totals"]["cost"], total)
+        self.assertAlmostEqual(gp["cost_share"], 5.31 / total)
+        self.assertAlmostEqual(gp["output_share"], 4_000 / 14_500)
+
+    def test_unrated_model_shows_no_rate_and_stays_out_of_cost(self):
+        report = self.report(since="2026-10-01")
+        explore = self.row(report, "Explore")
+        self.assertIsNone(explore["cost"])
+        self.assertFalse(explore["has_rate"])
+        self.assertIsNone(explore["cost_share"])
+        self.assertEqual(report["quality"]["models_without_rate"], {"claude-mystery-1": 600})
+        self.assertIn("no rate", audit.format_report(report))
+
+    def test_rows_are_sorted_by_cost_with_unrated_last(self):
+        report = self.report(since="2026-10-01")
+        self.assertEqual([r["type"] for r in report["rows"]], ["main", "general-purpose", "Explore"])
+
+    def test_date_filter_excludes_old_sessions(self):
+        self.assertEqual(self.report(since="2026-10-01")["quality"]["sessions"], 1)
+        self.assertEqual(self.report()["quality"]["sessions"], 2)
+
+    def test_quality_footer_numbers(self):
+        quality = self.report(since="2026-10-01")["quality"]
+        self.assertEqual((quality["sessions"], quality["subagent_runs"]), (1, 3))
+        self.assertEqual(quality["first_day"], "2026-10-01")
+
+    def test_no_prompt_text_in_any_output(self):
+        report = self.report(show=True)
+        self.assertNotIn(tb.SECRET, json.dumps(report))
+        self.assertNotIn(tb.SECRET, audit.format_report(report))
+
+    def test_descriptions_only_when_asked(self):
+        self.assertNotIn("descriptions", self.row(self.report(), "general-purpose"))
+        shown = self.report(show=True)
+        self.assertEqual(self.row(shown, "general-purpose")["descriptions"], ["a task"])
+        self.assertIn("a task", audit.format_report(shown))
+
+    def test_text_report_states_the_proxy_caveat_and_the_rates_date(self):
+        text = audit.format_report(self.report(since="2026-10-01"))
+        self.assertIn("proxy", text)
+        self.assertIn("2026-10-01", text)
+        self.assertIn("general-purpose", text)
+
+    def test_stale_rates_are_flagged(self):
+        quality = audit.new_quality()
+        dirs = audit.project_dirs(self.projects, project=str(self.project))
+        sums = [audit.summarize(u, RATES) for u in audit.load_units(dirs, None, None, quality)]
+        report = audit.build_report(sums, RATES, quality, {}, today=date(2027, 3, 1))
+        self.assertTrue(report["rates_stale"])
+        self.assertIn("older than", audit.format_report(report))
+
+    def test_empty_report_renders(self):
+        report = audit.build_report([], RATES, audit.new_quality(), {})
+        self.assertIn("No usage found", audit.format_report(report))
+
+
+class ReportCliTests(ReportCase):
+    def args(self, *extra):
+        return ["report", "--projects-dir", str(self.projects), "--rates", str(self.rates_path),
+                "--project", str(self.project), *extra]
+
+    def test_json_matches_the_text_numbers(self):
+        code, out, _ = run_cli(*self.args("--json", "--since", "2026-10-01"))
+        self.assertEqual(code, 0)
+        data = json.loads(out)
+        self.assertAlmostEqual(data["totals"]["cost"], 38.25 + 5.31)
+        code, text, _ = run_cli(*self.args("--since", "2026-10-01"))
+        self.assertEqual(code, 0)
+        self.assertIn("$38.25", text)
+        self.assertIn("$5.31", text)
+
+    def test_all_flag_reads_every_project(self):
+        tb.add_session(self.projects, "C--other", "s9", [tb.assistant("z", out=7)])
+        code, out, _ = run_cli("report", "--all", "--projects-dir", str(self.projects),
+                               "--rates", str(self.rates_path), "--json")
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["quality"]["sessions"], 3)
+
+    def test_missing_projects_dir_is_an_error(self):
+        code, _, err = run_cli("report", "--all", "--projects-dir", str(self.root / "nope"), "--rates", str(self.rates_path))
+        self.assertEqual(code, 2)
+        self.assertTrue(err.startswith("error:"))
+
+    def test_project_without_transcripts_is_a_message_not_an_error(self):
+        code, out, _ = run_cli("report", "--projects-dir", str(self.projects), "--rates", str(self.rates_path),
+                               "--project", str(self.root / "elsewhere"))
+        self.assertEqual(code, 0)
+        self.assertIn("No transcripts found", out)
+
+    def test_bad_date_and_bad_rates_are_errors(self):
+        code, _, err = run_cli(*self.args("--since", "10/01/2026"))
+        self.assertEqual(code, 2)
+        self.assertIn("YYYY-MM-DD", err)
+        bad = self.root / "bad.json"
+        bad.write_text("{nope", encoding="utf-8")
+        code, _, err = run_cli("report", "--projects-dir", str(self.projects), "--rates", str(bad))
+        self.assertEqual(code, 2)
+
+    def test_malformed_lines_surface_in_the_footer(self):
+        pdir = self.projects / self.slug
+        with open(pdir / "s1.jsonl", "ab") as f:
+            f.write(b"{broken\n")
+        code, out, _ = run_cli(*self.args("--since", "2026-10-01"))
+        self.assertEqual(code, 0)
+        self.assertIn("1 malformed", out)
+
+
 if __name__ == "__main__":
     unittest.main()

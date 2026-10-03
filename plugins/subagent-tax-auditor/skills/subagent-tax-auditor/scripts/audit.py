@@ -244,5 +244,169 @@ def summarize(unit, rates):
     }
 
 
+# --- the report ----------------------------------------------------------------------------
+
+def build_report(sums, rates, quality, selectors, show_descriptions=False, today=None):
+    rows = {}
+    for s in sums:
+        for model, tokens in s["per_model"].items():
+            row = rows.setdefault((s["type"], model), {
+                "type": s["type"], "model": model, "spawns": 0, "messages": 0,
+                "tokens": dict.fromkeys(KINDS, 0), "fixed": [], "descriptions": set()})
+            row["spawns"] += 1
+            row["messages"] += s["models"][model]
+            for kind in KINDS:
+                row["tokens"][kind] += tokens[kind]
+            if s["description"]:
+                row["descriptions"].add(s["description"])
+        rows[(s["type"], s["first_model"])]["fixed"].append(s["fixed"])
+    out, unrated, total_cost, total_output, total_tokens = [], {}, 0.0, 0, 0
+    for row in rows.values():
+        rate = rate_for(rates, row["model"])
+        cost = cost_of(row["tokens"], rate) if rate else None
+        volume = sum(row["tokens"].values())
+        if cost is None:
+            unrated[row["model"]] = unrated.get(row["model"], 0) + volume
+        else:
+            total_cost += cost
+        total_output += row["tokens"]["output"]
+        total_tokens += volume
+        entry = {
+            "type": row["type"], "model": row["model"], "spawns": row["spawns"], "messages": row["messages"],
+            "tokens": row["tokens"], "cost": cost, "has_rate": rate is not None,
+            "fixed_context_median": int(statistics.median(row["fixed"])) if row["fixed"] else None,
+        }
+        if show_descriptions:
+            entry["descriptions"] = sorted(row["descriptions"])[:5]
+        out.append(entry)
+    for entry in out:
+        entry["cost_share"] = entry["cost"] / total_cost if entry["cost"] is not None and total_cost > 0 else None
+        entry["output_share"] = entry["tokens"]["output"] / total_output if total_output > 0 else None
+    out.sort(key=lambda e: (e["cost"] is None, -(e["cost"] or 0), -sum(e["tokens"].values())))
+    days = sorted(s["start"][:10] for s in sums)
+    return {
+        "selectors": selectors,
+        "rates_as_of": rates["as_of"],
+        "rates_stale": rates_stale(rates, today),
+        "totals": {"cost": total_cost, "output": total_output, "tokens": total_tokens},
+        "rows": out,
+        "quality": {
+            **quality,
+            "sessions": sum(1 for s in sums if s["type"] == "main"),
+            "subagent_runs": sum(1 for s in sums if s["type"] != "main"),
+            "first_day": days[0] if days else None,
+            "last_day": days[-1] if days else None,
+            "models_without_rate": unrated,
+        },
+    }
+
+
+def _money(value):
+    return "no rate" if value is None else f"${value:,.2f}"
+
+
+def _share(value):
+    return "-" if value is None else f"{value * 100:.1f}%"
+
+
+def format_report(report):
+    quality = report["quality"]
+    if not report["rows"]:
+        return "No usage found for this selection.\n"
+    lines = [
+        f"Subagent tax report: {quality['sessions']} sessions, {quality['subagent_runs']} subagent runs, "
+        f"{quality['first_day']} to {quality['last_day']}",
+        f"Cost is a proxy: tokens times published API rates as of {report['rates_as_of']}. "
+        "Your subscription quota is not measured in dollars.",
+        "",
+        f"{'type':<22}{'model':<26}{'spawns':>7}{'cost':>11}{'cost%':>8}{'output%':>9}{'fixed ctx/spawn':>17}{'output tok':>12}",
+    ]
+    for row in report["rows"]:
+        fixed = "-" if row["fixed_context_median"] is None else f"{row['fixed_context_median']:,}"
+        lines.append(
+            f"{row['type'][:21]:<22}{row['model'][:25]:<26}{row['spawns']:>7}{_money(row['cost']):>11}"
+            f"{_share(row['cost_share']):>8}{_share(row['output_share']):>9}{fixed:>17}{row['tokens']['output']:>12,}")
+        for description in row.get("descriptions", []):
+            lines.append(f"    - {description}")
+    totals = report["totals"]
+    lines += [f"{'total':<48}{'':>7}{_money(totals['cost']):>11}{'':>8}{'':>9}{'':>17}{totals['output']:>12,}", ""]
+    notes = []
+    if quality["malformed_lines"]:
+        notes.append(f"{quality['malformed_lines']} malformed lines skipped")
+    if quality["lines_without_usage"]:
+        notes.append(f"{quality['lines_without_usage']} assistant lines without usage skipped")
+    if quality["unreadable_files"]:
+        notes.append(f"{quality['unreadable_files']} unreadable files skipped")
+    if quality["subagents_without_meta"]:
+        notes.append(f"{quality['subagents_without_meta']} subagent runs without a readable meta file (typed unknown)")
+    for model, tokens in sorted(quality["models_without_rate"].items()):
+        notes.append(f"{model}: no rate in rates.json, {tokens:,} tokens left out of cost")
+    if report["rates_stale"]:
+        notes.append(f"rates.json is older than {STALE_DAYS} days; check the prices")
+    lines.append("Data quality: " + ("; ".join(notes) if notes else "no problems found"))
+    return "\n".join(lines) + "\n"
+
+
+# --- command line --------------------------------------------------------------------------
+
+_DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def add_selectors(parser):
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--project", help="project directory (default: the current directory)")
+    group.add_argument("--all", action="store_true", help="every project")
+    parser.add_argument("--since", help="only files that started on or after YYYY-MM-DD")
+    parser.add_argument("--until", help="only files that started on or before YYYY-MM-DD")
+    parser.add_argument("--projects-dir", help="transcripts directory (default: $CLAUDE_CONFIG_DIR/projects or ~/.claude/projects)")
+    parser.add_argument("--rates", help="rates file (default: rates.json next to scripts/)")
+
+
+def gather(args, project=None, everything=None):
+    for flag in ("since", "until"):
+        value = getattr(args, flag, None)
+        if value and not _DAY.match(value):
+            raise AuditError(f"--{flag} must be YYYY-MM-DD")
+    project = args.project if project is None else project
+    everything = args.all if everything is None else everything
+    rates = load_rates(args.rates)
+    quality = new_quality()
+    dirs = project_dirs(projects_dir(args.projects_dir), project, everything)
+    sums = [summarize(u, rates) for u in load_units(dirs, args.since, args.until, quality)]
+    selectors = {"project": os.path.abspath(project) if project else None, "all": bool(everything),
+                 "since": args.since, "until": args.until}
+    return sums, quality, selectors, rates, bool(dirs)
+
+
+def cmd_report(args):
+    sums, quality, selectors, rates, found = gather(args)
+    if not found:
+        print(f"No transcripts found for {os.path.abspath(args.project or os.getcwd())} "
+              "(use --all to read every project, or --project PATH).")
+        return 0
+    report = build_report(sums, rates, quality, selectors, show_descriptions=args.show_descriptions)
+    print(json.dumps(report, indent=2) if args.json else format_report(report), end="" if not args.json else "\n")
+    return 0
+
+
+def main(argv=None):
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
+    parser = argparse.ArgumentParser(prog="audit.py")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    report = sub.add_parser("report", help="split usage between the main thread and each subagent type")
+    add_selectors(report)
+    report.add_argument("--json", action="store_true")
+    report.add_argument("--show-descriptions", action="store_true", help="include task descriptions (off by default)")
+    report.set_defaults(func=cmd_report)
+    args = parser.parse_args(argv)
+    try:
+        return args.func(args)
+    except (AuditError, OSError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+
 if __name__ == "__main__":
-    sys.exit("audit.py: the command line is added in the next task")
+    sys.exit(main())
