@@ -347,6 +347,88 @@ def format_report(report):
     return "\n".join(lines) + "\n"
 
 
+# --- snapshot and compare ------------------------------------------------------------------
+
+def type_stats(sums):
+    groups = {}
+    for s in sums:
+        groups.setdefault(s["type"], []).append(s)
+    stats = {}
+    for kind, items in groups.items():
+        costs = [s["cost"] for s in items if s["cost"] is not None]
+        stats[kind] = {
+            "spawns": len(items),
+            "models": sorted({model for s in items for model in s["models"]}),
+            "fixed_median": statistics.median([s["fixed"] for s in items]),
+            "tokens_median": statistics.median([sum(s["tokens"].values()) for s in items]),
+            "cost_median": statistics.median(costs) if costs else None,
+        }
+    return stats
+
+
+def _stamp(moment=None):
+    moment = moment or datetime.now(timezone.utc)
+    return moment.strftime("%Y-%m-%dT%H:%M:%S.") + f"{moment.microsecond // 1000:03d}Z"
+
+
+def snapshot_data(sums, rates, selectors, now=None):
+    return {"timestamp": now or _stamp(), "rates_as_of": rates["as_of"], "selectors": selectors,
+            "types": type_stats(sums)}
+
+
+def verdict(before, after):
+    if before is None:
+        return "new since the snapshot; nothing to compare"
+    if after is None:
+        return "no spawns since the snapshot"
+    if before["spawns"] < MIN_SPAWNS or after["spawns"] < MIN_SPAWNS:
+        return (f"not enough data (need {MIN_SPAWNS}+ spawns on each side; "
+                f"{before['spawns']} before, {after['spawns']} after)")
+    if before["models"] == after["models"]:
+        return "model unchanged; any difference is the mix of tasks, not the edit"
+    key, label = "cost_median", "cost"
+    if before["cost_median"] is None or after["cost_median"] is None:
+        key, label = "tokens_median", "tokens"
+    if not before[key]:
+        return "cannot compare: the earlier median is zero"
+    change = (after[key] - before[key]) / before[key] * 100
+    word = "fell" if change < 0 else "rose"
+    return f"median {label} per spawn {word} {abs(change):.0f}% (different tasks, so a trend, not proof)"
+
+
+def compare(snapshot, sums, rates):
+    try:
+        stamp, before = snapshot["timestamp"], snapshot["types"]
+        before_rates = snapshot.get("rates_as_of")
+    except (KeyError, TypeError):
+        raise AuditError("the snapshot file is missing its timestamp or types") from None
+    after = type_stats([s for s in sums if s["start"] > stamp])
+    note = None
+    if before_rates != rates["as_of"]:
+        note = (f"rates.json changed since the snapshot ({before_rates} to {rates['as_of']}); "
+                "a change in cost may be a price change")
+    kinds = sorted(set(before) | set(after))
+    return {"rates_note": note, "types": [
+        {"type": k, "before": before.get(k), "after": after.get(k), "verdict": verdict(before.get(k), after.get(k))}
+        for k in kinds]}
+
+
+def format_compare(result):
+    def cell(stats):
+        if stats is None:
+            return "-"
+        cost = "no rate" if stats["cost_median"] is None else f"${stats['cost_median']:.3f}"
+        return f"{stats['spawns']} spawns, {cost}/spawn, {','.join(stats['models'])}"
+
+    lines = ["Before and after the snapshot, per agent type:", ""]
+    for entry in result["types"]:
+        lines += [f"{entry['type']}", f"  before: {cell(entry['before'])}", f"  after:  {cell(entry['after'])}",
+                  f"  verdict: {entry['verdict']}", ""]
+    if result["rates_note"]:
+        lines.append(f"Note: {result['rates_note']}")
+    return "\n".join(lines).rstrip() + "\n"
+
+
 # --- command line --------------------------------------------------------------------------
 
 _DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -389,6 +471,32 @@ def cmd_report(args):
     return 0
 
 
+def cmd_snapshot(args):
+    sums, _, selectors, rates, _ = gather(args)
+    out = Path(args.out)
+    out.write_text(json.dumps(snapshot_data(sums, rates, selectors), indent=2) + "\n", encoding="utf-8")
+    print(f"Snapshot saved to {out}")
+    return 0
+
+
+def cmd_compare(args):
+    try:
+        snapshot = json.loads(Path(args.snapshot).read_text(encoding="utf-8-sig"))
+    except OSError as exc:
+        raise AuditError(f"cannot read the snapshot {args.snapshot} ({exc.strerror or exc})") from None
+    except ValueError as exc:
+        raise AuditError(f"{args.snapshot} is not valid JSON ({exc})") from None
+    saved = snapshot.get("selectors") if isinstance(snapshot, dict) else None
+    saved = saved if isinstance(saved, dict) else {}
+    project, everything = args.project, args.all
+    if not project and not everything:
+        project, everything = saved.get("project"), bool(saved.get("all"))
+    sums, _, _, rates, _ = gather(args, project=project, everything=everything)
+    result = compare(snapshot, sums, rates)
+    print(json.dumps(result, indent=2) if args.json else format_compare(result), end="" if not args.json else "\n")
+    return 0
+
+
 def main(argv=None):
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
@@ -400,6 +508,15 @@ def main(argv=None):
     report.add_argument("--json", action="store_true")
     report.add_argument("--show-descriptions", action="store_true", help="include task descriptions (off by default)")
     report.set_defaults(func=cmd_report)
+    snap = sub.add_parser("snapshot", help="save the per-type numbers so a later compare has a baseline")
+    add_selectors(snap)
+    snap.add_argument("--out", required=True)
+    snap.set_defaults(func=cmd_snapshot)
+    comp = sub.add_parser("compare", help="per-type usage per spawn before and after a snapshot")
+    add_selectors(comp)
+    comp.add_argument("--snapshot", required=True)
+    comp.add_argument("--json", action="store_true")
+    comp.set_defaults(func=cmd_compare)
     args = parser.parse_args(argv)
     try:
         return args.func(args)

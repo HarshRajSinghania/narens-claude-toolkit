@@ -423,5 +423,137 @@ class ReportCliTests(ReportCase):
         self.assertIn("1 malformed", out)
 
 
+BEFORE = "2026-10-01T10:00:00.000Z"
+AFTER = "2026-10-05T10:00:00.000Z"
+STAMP = "2026-10-03T00:00:00.000Z"
+
+
+class CompareCase(TempCase):
+    def setUp(self):
+        super().setUp()
+        self.project = self.root / "proj"
+        self.slug = audit.slug_for(self.project)
+        self.rates_path = self.root / "rates.json"
+        self.rates_path.write_text(json.dumps(RATES), encoding="utf-8")
+        self.count = 0
+
+    def spawns(self, kind, model, n, ts):
+        subs = []
+        for _ in range(n):
+            self.count += 1
+            subs.append({"id": f"a{self.count}", "type": kind, "ts": ts, "records": [
+                tb.assistant(f"x{self.count}", model=model, read=1_000_000, out=1_000, ts=ts, sidechain=True)]})
+        return subs
+
+    def build(self, subagents):
+        tb.add_session(self.projects, self.slug, f"s{self.count}", [tb.assistant(f"m{self.count}", out=1)],
+                       subagents=subagents)
+
+    def sums(self):
+        quality = audit.new_quality()
+        dirs = audit.project_dirs(self.projects, project=str(self.project))
+        return [audit.summarize(u, RATES) for u in audit.load_units(dirs, None, None, quality)]
+
+    def snapshot_and_compare(self):
+        sums = self.sums()
+        snap = audit.snapshot_data([s for s in sums if s["start"] <= STAMP], RATES, {"project": str(self.project), "all": False}, now=STAMP)
+        return snap, audit.compare(snap, sums, RATES)
+
+    def entry(self, result, kind):
+        return next(t for t in result["types"] if t["type"] == kind)
+
+
+class SnapshotCompareTests(CompareCase):
+    def test_snapshot_shape(self):
+        self.build(self.spawns("reviewer", "claude-sonnet-5-5", 6, BEFORE))
+        snap, _ = self.snapshot_and_compare()
+        self.assertEqual(snap["timestamp"], STAMP)
+        self.assertEqual(snap["rates_as_of"], "2026-10-01")
+        stats = snap["types"]["reviewer"]
+        self.assertEqual((stats["spawns"], stats["models"]), (6, ["claude-sonnet-5-5"]))
+        self.assertEqual(stats["fixed_median"], 1_000_000)
+        self.assertAlmostEqual(stats["cost_median"], 0.3 + 0.015)
+
+    def test_model_change_reports_the_percentage_change(self):
+        self.build(self.spawns("reviewer", "claude-sonnet-5-5", 6, BEFORE) + self.spawns("reviewer", "claude-haiku-4-5", 6, AFTER))
+        _, result = self.snapshot_and_compare()
+        entry = self.entry(result, "reviewer")
+        self.assertEqual((entry["before"]["spawns"], entry["after"]["spawns"]), (6, 6))
+        self.assertIn("fell 67%", entry["verdict"])
+        self.assertIn("trend, not proof", entry["verdict"])
+
+    def test_unchanged_model_says_so(self):
+        self.build(self.spawns("reviewer", "claude-sonnet-5-5", 6, BEFORE) + self.spawns("reviewer", "claude-sonnet-5-5", 6, AFTER))
+        self.assertIn("model unchanged", self.entry(self.snapshot_and_compare()[1], "reviewer")["verdict"])
+
+    def test_small_samples_give_no_verdict(self):
+        self.build(self.spawns("reviewer", "claude-sonnet-5-5", 6, BEFORE) + self.spawns("reviewer", "claude-haiku-4-5", 3, AFTER))
+        verdict = self.entry(self.snapshot_and_compare()[1], "reviewer")["verdict"]
+        self.assertIn("not enough data", verdict)
+        self.assertNotIn("%", verdict)
+
+    def test_type_with_no_spawns_after(self):
+        self.build(self.spawns("reviewer", "claude-sonnet-5-5", 6, BEFORE))
+        self.assertIn("no spawns since", self.entry(self.snapshot_and_compare()[1], "reviewer")["verdict"])
+
+    def test_type_that_is_new_after(self):
+        self.build(self.spawns("reviewer", "claude-sonnet-5-5", 6, BEFORE) + self.spawns("planner", "claude-sonnet-5-5", 6, AFTER))
+        self.assertIn("new since", self.entry(self.snapshot_and_compare()[1], "planner")["verdict"])
+
+    def test_cost_not_comparable_falls_back_to_tokens(self):
+        self.build(self.spawns("reviewer", "claude-mystery-1", 6, BEFORE) + self.spawns("reviewer", "claude-mystery-2", 6, AFTER))
+        verdict = self.entry(self.snapshot_and_compare()[1], "reviewer")["verdict"]
+        self.assertIn("median tokens per spawn", verdict)
+
+    def test_rates_change_is_noted(self):
+        self.build(self.spawns("reviewer", "claude-sonnet-5-5", 6, BEFORE))
+        sums = self.sums()
+        snap = audit.snapshot_data(sums, RATES, {"project": None, "all": True}, now=STAMP)
+        newer = dict(RATES, as_of="2026-12-01")
+        self.assertIn("rates", audit.compare(snap, sums, newer)["rates_note"])
+        self.assertIsNone(audit.compare(snap, sums, RATES)["rates_note"])
+
+
+class SnapshotCompareCliTests(CompareCase):
+    def common(self):
+        return ["--projects-dir", str(self.projects), "--rates", str(self.rates_path), "--project", str(self.project)]
+
+    def test_snapshot_writes_a_file_and_compare_reads_it(self):
+        self.build(self.spawns("reviewer", "claude-sonnet-5-5", 6, BEFORE))
+        out = self.root / "snap.json"
+        code, stdout, _ = run_cli("snapshot", "--out", str(out), *self.common())
+        self.assertEqual(code, 0)
+        self.assertIn(str(out), stdout)
+        saved = json.loads(out.read_text(encoding="utf-8"))
+        self.assertIn("reviewer", saved["types"])
+        self.assertNotIn(tb.SECRET, out.read_text(encoding="utf-8"))
+        code, stdout, _ = run_cli("compare", "--snapshot", str(out), *self.common())
+        self.assertEqual(code, 0)
+        self.assertIn("reviewer", stdout)
+
+    def test_compare_inherits_the_snapshot_project(self):
+        self.build(self.spawns("reviewer", "claude-sonnet-5-5", 6, BEFORE))
+        out = self.root / "snap.json"
+        run_cli("snapshot", "--out", str(out), *self.common())
+        code, stdout, _ = run_cli("compare", "--snapshot", str(out), "--projects-dir", str(self.projects),
+                                  "--rates", str(self.rates_path), "--json")
+        self.assertEqual(code, 0)
+        self.assertTrue(any(t["type"] == "reviewer" for t in json.loads(stdout)["types"]))
+
+    def test_bad_snapshot_file_is_an_error(self):
+        bad = self.root / "bad.json"
+        bad.write_text("{nope", encoding="utf-8")
+        code, _, err = run_cli("compare", "--snapshot", str(bad), *self.common())
+        self.assertEqual(code, 2)
+        self.assertTrue(err.startswith("error:"))
+        code, _, err = run_cli("compare", "--snapshot", str(self.root / "absent.json"), *self.common())
+        self.assertEqual(code, 2)
+
+    def test_unwritable_snapshot_path_is_a_clean_error(self):
+        code, _, err = run_cli("snapshot", "--out", str(self.root), *self.common())  # a directory
+        self.assertEqual(code, 2)
+        self.assertTrue(err.startswith("error:"))
+
+
 if __name__ == "__main__":
     unittest.main()
