@@ -325,5 +325,19 @@ class FinalReviewTests(unittest.TestCase):
             self.assertEqual(ae.default_dirs()[1], Path.home() / ".claude" / "agents")
 
 
+
+class BackupRecordTests(unittest.TestCase):
+    def test_backup_record_uses_lf_line_endings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            agents, backups = Path(tmp, "agents"), Path(tmp, "backups")
+            agents.mkdir()
+            (agents / "reviewer.md").write_bytes(AGENT.encode("utf-8"))
+            code, _, _ = run_cli("apply", "--agent", "reviewer", "--model", "haiku", "--agents-dir", str(agents),
+                                 "--backup-dir", str(backups))
+            self.assertEqual(code, 0)
+            record = next(backups.glob("reviewer.*.json"))
+            self.assertNotIn(b"\r\n", record.read_bytes())
+
+
 if __name__ == "__main__":
     unittest.main()

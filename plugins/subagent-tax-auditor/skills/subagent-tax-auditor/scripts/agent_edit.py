@@ -180,9 +180,9 @@ def apply_edit(path, new_text, backup_dir, agent):
     backup = backup_dir / f"{agent}.{stamp}-{counter:03d}.bak"
     meta = backup_dir / f"{agent}.{stamp}-{counter:03d}.json"
     backup.write_bytes(before)
-    meta.write_text(json.dumps({
+    meta.write_bytes((json.dumps({
         "agent": agent, "path": os.path.realpath(path), "backup": backup.name,
-        "before_sha256": _sha(before), "after_sha256": _sha(after)}, indent=2) + "\n", encoding="utf-8")
+        "before_sha256": _sha(before), "after_sha256": _sha(after)}, indent=2) + "\n").encode("utf-8"))
     try:
         _write_atomic(path, after)
     except BaseException:
