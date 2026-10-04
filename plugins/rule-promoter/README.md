@@ -2,7 +2,7 @@
 
 > Turn the CLAUDE.md rules Claude ignores into hooks that actually enforce them.
 
-Part of [Naren's Claude Skills](https://github.com/NarenDawar/narens-claude-skills).
+Part of [Naren's Claude Toolkit](https://github.com/NarenDawar/narens-claude-toolkit).
 
 CLAUDE.md rules are advice. Claude can rationalize past them, especially "never edit migrations" or "run the tests before you finish". A hook is enforcement. `rule-promoter` reads your CLAUDE.md, picks out the rules a hook can really enforce, writes them to a small rules file, proves each one blocks a violation, and installs the hooks once you say yes. Existing tools stop at a compliance score; this one fixes the rules.
 
@@ -19,8 +19,8 @@ Only when you ask. Example phrasings:
 **Plugin marketplace (recommended)**
 
 ```text
-/plugin marketplace add NarenDawar/narens-claude-skills
-/plugin install rule-promoter@narens-claude-skills
+/plugin marketplace add NarenDawar/narens-claude-toolkit
+/plugin install rule-promoter@narens-claude-toolkit
 ```
 
 **Manual**

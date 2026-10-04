@@ -2,7 +2,7 @@
 
 > Quiz yourself on the code Claude just wrote, and find the parts you could not maintain.
 
-Part of [Naren's Claude Skills](https://github.com/NarenDawar/narens-claude-skills).
+Part of [Naren's Claude Toolkit](https://github.com/NarenDawar/narens-claude-toolkit).
 
 AI-written code is easy to accept and hard to own. `comprehension-check` asks you a few pointed questions about the change Claude made in your session, grades your answers against the actual code, and tells you which parts you could not maintain yourself.
 
@@ -23,8 +23,8 @@ You can also run it directly with `/comprehension-check:comprehension-check`. It
 **Plugin marketplace (recommended)**
 
 ```text
-/plugin marketplace add NarenDawar/narens-claude-skills
-/plugin install comprehension-check@narens-claude-skills
+/plugin marketplace add NarenDawar/narens-claude-toolkit
+/plugin install comprehension-check@narens-claude-toolkit
 ```
 
 **Manual**

@@ -45,7 +45,7 @@ def write_marketplace(root, names, *, owner="Naren"):
     d = Path(root) / ".claude-plugin"
     d.mkdir(exist_ok=True)
     data = {
-        "name": "narens-claude-skills",
+        "name": "narens-claude-toolkit",
         "owner": {"name": owner},
         "plugins": [
             {"name": n, "source": f"./plugins/{n}", "description": f"Does {n} things."}

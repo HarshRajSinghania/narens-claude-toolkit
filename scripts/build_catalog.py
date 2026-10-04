@@ -42,7 +42,7 @@ def render_table(items):
 
 def render_llms(items):
     lines = [
-        "# Naren's Claude Skills",
+        "# Naren's Claude Toolkit",
         "",
         "> Original Claude Code skills and plugins by Naren. Install through the plugin "
         f"marketplace `{common.GITHUB_USER}/{common.MARKETPLACE}`.",

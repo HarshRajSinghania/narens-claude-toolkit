@@ -55,7 +55,7 @@ template/           the skill template (unchanged)
 
 `common.plugin_kinds(pdir)` returns the set of kinds a plugin has:
 
-- `skill` when `skills/<n>/SKILL.md` exists for at least one `<n>`;
+- `skill` when `skills/` contains at least one directory (so a directory missing its `SKILL.md` is reported with that specific error);
 - `mod` when `hooks/hooks.json` exists.
 
 A plugin may be both. A plugin with neither is an error: `needs skills/ or hooks/hooks.json`. This replaces today's "needs at least one skill directory".
@@ -63,7 +63,7 @@ A plugin may be both. A plugin with neither is an error: `needs skills/ or hooks
 ### Validator (`validate.py`)
 
 - Plugin checks (name equals directory, `version`, `description`, author `Naren`, README present) are unchanged, as are the skill checks for any plugin with `skills/`.
-- A plugin with `hooks/hooks.json` gets mod checks: the file is valid JSON; `modules` is a list of strings; each listed path, resolved relative to `hooks/`, exists as a file. A failure names the plugin, the file and the problem.
+- A plugin with `hooks/hooks.json` gets mod checks: the file is valid JSON; `modules` is a non-empty list of non-empty strings; each listed path, resolved relative to `hooks/`, exists as a file. A failure names the plugin, the file and the problem.
 - `servers/<name>/` checks: the name is kebab-case; `README.md` exists; at least one of `package.json` or `pyproject.toml` exists; the README has a first `> ` line (the description source).
 - `marketplace.json` checks are unchanged: every plugin in `plugins/` is listed, no entry is missing a directory. Servers are not listed and not required to be.
 
@@ -110,8 +110,8 @@ Written first, in the repo's `unittest` style:
 
 1. All repo changes on a branch, test-first, with the suite and `validate.py` green.
 2. Final review of the branch.
-3. Merge to `main` locally; push only on request.
-4. After the push, and only with explicit confirmation: `gh repo rename narens-claude-toolkit`, update the local `origin`, and update the repo description and topics (adding mod and MCP topics). Re-export `social-preview.png` by hand and upload it.
+3. Merge to `main` locally. Nothing is pushed or renamed without explicit confirmation.
+4. With explicit confirmation, rename first and then push, so the new README badge and links resolve the moment they are public: `gh repo rename narens-claude-toolkit`, update the local `origin`, push `main`, and update the repo description and topics (adding mod and MCP topics). Re-export `social-preview.png` by hand and upload it.
 5. Verify in Claude Code that `/plugin marketplace add NarenDawar/narens-claude-toolkit` loads and one plugin installs.
 
 ## Out of scope

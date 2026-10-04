@@ -18,7 +18,7 @@ class RenderTable(unittest.TestCase):
         self.assertIn("| Skill | What it does | Install |", out)
         self.assertIn(
             "| [`alpha`](plugins/alpha/README.md) | Does alpha. | "
-            "`/plugin install alpha@narens-claude-skills` |",
+            "`/plugin install alpha@narens-claude-toolkit` |",
             out,
         )
 
@@ -33,14 +33,14 @@ class RenderTable(unittest.TestCase):
 class RenderLlms(unittest.TestCase):
     def test_empty(self):
         out = build_catalog.render_llms([])
-        self.assertTrue(out.startswith("# Naren's Claude Skills"))
+        self.assertTrue(out.startswith("# Naren's Claude Toolkit"))
         self.assertIn("Coming soon", out)
         self.assertTrue(out.endswith("\n"))
 
     def test_with_skills(self):
         out = build_catalog.render_llms([{"name": "alpha", "description": "Does alpha."}])
         self.assertIn(
-            "- [alpha](https://github.com/NarenDawar/narens-claude-skills/blob/main/"
+            "- [alpha](https://github.com/NarenDawar/narens-claude-toolkit/blob/main/"
             "plugins/alpha/README.md): Does alpha.",
             out,
         )

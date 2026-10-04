@@ -1,11 +1,11 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-label="Naren's Claude Skills">
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-label="Naren's Claude Toolkit">
   <rect width="1280" height="640" fill="#0F0B1E"/>
   <rect x="0" y="0" width="1280" height="10" fill="#7C5CFF"/>
   <g transform="translate(96 120)">
     <rect width="160" height="160" rx="36" fill="#7C5CFF"/>
     <path d="M48 118V42h12l40 50V42h12v76H100L60 68v50z" fill="#FFFFFF"/>
   </g>
-  <text x="96" y="400" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="88" font-weight="700" fill="#FFFFFF">Naren's Claude Skills</text>
-  <text x="96" y="470" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="38" fill="#B8A9FF">Unique Agent Skills and Claude Code plugins.</text>
-  <text x="96" y="540" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="30" fill="#8C7FD6">One-command install  ·  github.com/NarenDawar/narens-claude-skills</text>
+  <text x="96" y="400" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="88" font-weight="700" fill="#FFFFFF">Naren's Claude Toolkit</text>
+  <text x="96" y="470" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="38" fill="#B8A9FF">Skills, mods and MCP servers for Claude Code.</text>
+  <text x="96" y="540" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="30" fill="#8C7FD6">One-command install  ·  github.com/NarenDawar/narens-claude-toolkit</text>
 </svg>

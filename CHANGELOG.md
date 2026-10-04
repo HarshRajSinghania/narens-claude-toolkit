@@ -9,6 +9,9 @@ All notable changes are recorded here. Format follows [Keep a Changelog](https:/
 - `subagent-tax-auditor` skill: reads your local session transcripts, shows which subagent types used up your quota (per type and model, with fixed context per spawn), recommends cheaper models, edits custom agents' `model` after confirmation with a backup and undo, and compares usage before and after.
 - `rule-promoter` skill: turns the enforceable rules in CLAUDE.md into hooks (protected paths, blocked commands, banned content, must-pass-before-stopping), proves each rule blocks a violation, and installs them into `.claude/settings.json` after confirmation.
 
+### Changed
+- The repo and marketplace are now `narens-claude-toolkit` (was `narens-claude-skills`), and the tooling handles skills, mods and MCP servers. If you installed a plugin from the old marketplace, run `/plugin marketplace remove narens-claude-skills`, then `/plugin marketplace add NarenDawar/narens-claude-toolkit`, then `/plugin install <plugin-name>@narens-claude-toolkit`. Plugin names, versions and behavior are unchanged.
+
 ### Fixed
 - `subagent-tax-auditor` 0.1.1: snapshot files and backup records are written with LF line endings on Windows; the date filters say they use UTC dates; a run that switches models counts as one spawn, on the model it started with.
 - `rule-promoter` 0.1.3: a `settings.json` with comments or trailing commas is still refused, and the error now says Claude Code treats those as errors too.

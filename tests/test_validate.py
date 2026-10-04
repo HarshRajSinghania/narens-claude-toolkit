@@ -168,14 +168,14 @@ class ValidateTests(unittest.TestCase):
     def _write_marketplace_raw(self, plugins):
         import json
         (self.root / ".claude-plugin/marketplace.json").write_text(json.dumps({
-            "name": "narens-claude-skills", "owner": {"name": "Naren"}, "plugins": plugins}))
+            "name": "narens-claude-toolkit", "owner": {"name": "Naren"}, "plugins": plugins}))
 
     def test_plugins_not_a_list(self):
         import json
         helpers.make_valid_repo(self.root, ["alpha"])
         for bad in (5, None, {"a": 1}):
             (self.root / ".claude-plugin/marketplace.json").write_text(json.dumps({
-                "name": "narens-claude-skills", "owner": {"name": "Naren"}, "plugins": bad}))
+                "name": "narens-claude-toolkit", "owner": {"name": "Naren"}, "plugins": bad}))
             self.assertHasError("'plugins' must be an array")
 
     def test_non_string_description_is_an_error_not_a_crash(self):

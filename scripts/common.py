@@ -5,7 +5,7 @@ from pathlib import Path
 
 OWNER_NAME = "Naren"
 GITHUB_USER = "NarenDawar"
-MARKETPLACE = "narens-claude-skills"
+MARKETPLACE = "narens-claude-toolkit"
 REPO_URL = f"https://github.com/{GITHUB_USER}/{MARKETPLACE}"
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
