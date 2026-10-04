@@ -20,10 +20,10 @@ In this skill's `scripts/` directory (use the base directory shown when the skil
 ## Before a task is scheduled (pre-flight)
 
 1. Get the prompt: from the user, or by reading the task through the surface's tool (table below). Save it to a scratch file outside the repo.
-2. Run `preflight.py --prompt-file FILE --json`. Show the tool list as "likely needs", never "will need". Offer to pre-approve the `pre-approve` tools in the user's permission settings; for `approve once with Run now` tools (git push, deleting, sending, deploying) say they should be approved once by running the task with Run now, not left permanently allowed.
-3. If `time_guard.present` is false, ask the user how many hours of lateness is acceptable, rerun with `--guard-hours`, and show the snippet. Adding it is a prompt edit: show the diff and wait for an explicit yes in this conversation first.
+2. Run `preflight.py --prompt-file FILE --json`. Show the tool list as "likely needs", never "will need", and when it says none were detected, ask the user what the task touches instead of treating that as an all-clear. Offer to pre-approve the `pre-approve` tools in the user's permission settings; for `approve once with Run now` tools (git push, deleting, sending, deploying) say they should be approved once by running the task with Run now, not left permanently allowed.
+3. A found guard is only a regex match: read it back to the user and confirm it really checks the time. If `time_guard.present` is false, ask the user how many hours of lateness is acceptable, rerun with `--guard-hours`, and show the snippet. Adding it is a prompt edit: show the diff and wait for an explicit yes in this conversation first.
 4. Mention the staleness hints: those phrases are where a late run goes wrong even with a guard.
-5. Run `power_check.py`. If `keeps_awake` is `no` or `unknown`, say what the findings show. Then ask the user to confirm Claude Desktop's Keep computer awake setting, which the script cannot see.
+5. Run `power_check.py`. It reads the sleep timeout, the hibernate timeout and the lid-close action (including settings Windows hides). If `keeps_awake` is `no` or `unknown`, say what the findings show; `unknown` on a laptop usually means the lid setting could not be read. Then ask the user to confirm Claude Desktop's Keep computer awake setting, which the script cannot see.
 
 ## After a run did not fire (post-mortem)
 
@@ -39,18 +39,25 @@ In this skill's `scripts/` directory (use the base directory shown when the skil
      "last_event": "string or null",
      "error_text": "string or null",
      "permission_denied_tool": "string or null",
-     "machine_events": [{"kind": "sleep | wake | lid-close", "at": "ISO-8601"}]
+     "machine_events": [{"kind": "sleep | hibernate | lid-close | wake", "at": "ISO-8601"}]
    }
    ```
 
-   Leave a field `null` when the surface does not give it. Never invent a value. Only diagnose a run whose scheduled time has already passed.
-2. For `machine_events`, ask the user, or with their consent read sleep history around the scheduled time: on Windows the System log's Kernel-Power events 42 (entering sleep) and 107 (resume from sleep); on macOS `pmset -g log`. Show the command before running it.
+   Leave a field `null` when the surface does not give it. Never invent a value. Only diagnose a run whose scheduled time has already passed. Write the file as UTF-8 (a Windows PowerShell `>` redirect writes UTF-16; the script reads that too, but prefer UTF-8).
+
+   How the script reads the record:
+   - `status`: `completed`, `succeeded`, `success`, `ok`, `done` or `finished` is a finished run; `failed`, `error`, `errored`, `timed-out`, `timeout` or `aborted` is a failure; anything else (`running`, `cancelled`, `stopped`, an unfamiliar word) is not treated as finished. Use the surface's own word, not your paraphrase.
+   - `last_event` and `status` containing `permission`, `denied`, `approval` or `approve` (any case, `_` or `-`) count as a permission halt. Use the surface's own wording.
+   - `machine_events[].kind` must be one of `sleep`, `hibernate`, `lid-close`, `wake` (any case); any other kind is an error, so map the source's events onto these.
+   - A `wake` with no earlier sleep in the window is not sleep evidence.
+2. For `machine_events`, ask the user, or with their consent read sleep history around the scheduled time: on Windows the System log's Kernel-Power events: 42 (entering sleep) and 107 (resume from sleep), and on laptops with Modern Standby 506 (entering) and 507 (exiting), which is how most recent laptops sleep; on macOS `pmset -g log`. Show the command before running it.
 3. Run `diagnose.py --record FILE --json` and report the verdict, the `why` and the evidence verbatim.
 4. Act on the verdict:
    - `permission-halt`: name the tool, then use the pre-flight advice for it.
    - `slept-through`: run `power_check.py`, and point to the Keep computer awake setting and the lid-close action.
    - `late-catchup`: add or tighten the time guard, using pre-flight steps 3 and 4.
    - `failed-unknown`: show the error text; it is not a scheduling problem the skill can classify.
+   - `unfinished-unknown`: the run started on time but nothing shows it finished (still running, cancelled, stopped, or an unfamiliar status). Show the status and ask the user whether it is still going; do not call it healthy.
    - `never-ran-unknown`: say there is not enough data. Suggest the user check the machine was on and the app open at that time. Do not guess a cause.
    - `healthy`: say the run looks fine and ask what they saw.
 
