@@ -1,0 +1,13 @@
+{
+  "name": "schedule-doctor",
+  "version": "0.1.0",
+  "description": "Use when the user is about to schedule a Claude task, or asks why a scheduled task, /loop, cron job or routine did not run, ran late, or stopped partway (for example 'will this scheduled task actually run?', 'why didn't my 7am task fire?', 'check this before I schedule it').",
+  "author": {
+    "name": "Naren",
+    "url": "https://github.com/NarenDawar"
+  },
+  "homepage": "https://github.com/NarenDawar/narens-claude-skills/tree/main/plugins/schedule-doctor",
+  "repository": "https://github.com/NarenDawar/narens-claude-skills",
+  "license": "MIT",
+  "keywords": ["claude-code", "claude-skills", "agent-skills"]
+}
