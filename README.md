@@ -37,9 +37,11 @@ This repo used to be `narens-claude-skills`. The marketplace is now `narens-clau
 
 Plugin names, versions and behavior are unchanged. Removing the old marketplace may also remove the plugins you installed from it, so reinstall each one with the new suffix. Old GitHub links keep redirecting.
 
-## Skills
+## What is inside
 
 <!-- CATALOG:START -->
+### Skills
+
 | Skill | What it does | Install |
 | --- | --- | --- |
 | [`comprehension-check`](plugins/comprehension-check/README.md) | Use when the user asks to be quizzed on, or to check their understanding of, code Claude wrote this session (for example 'quiz me on that' or 'do I actually understand this change?'). | `/plugin install comprehension-check@narens-claude-toolkit` |
@@ -47,6 +49,14 @@ Plugin names, versions and behavior are unchanged. Removing the old marketplace 
 | [`rule-promoter`](plugins/rule-promoter/README.md) | Use when the user wants rules in CLAUDE.md enforced with hooks, says Claude keeps ignoring a CLAUDE.md rule, or asks to turn CLAUDE.md rules into hooks (for example 'promote my CLAUDE.md rules to hooks' or 'make Claude stop editing migrations'). | `/plugin install rule-promoter@narens-claude-toolkit` |
 | [`schedule-doctor`](plugins/schedule-doctor/README.md) | Use when the user is about to schedule a Claude task, or asks why a scheduled task, /loop, cron job or routine did not run, ran late, or stopped partway (for example 'will this scheduled task actually run?', 'why didn't my 7am task fire?', 'check this before I schedule it'). | `/plugin install schedule-doctor@narens-claude-toolkit` |
 | [`subagent-tax-auditor`](plugins/subagent-tax-auditor/README.md) | Use when the user asks why their Claude Code quota or usage limit runs out so fast, which subagents cost the most, or wants their subagents made cheaper (for example 'audit my subagents', 'which agent is eating my quota', 'make my agents cheaper'). | `/plugin install subagent-tax-auditor@narens-claude-toolkit` |
+
+### Mods
+
+_Coming soon._
+
+### MCP servers
+
+_Coming soon._
 <!-- CATALOG:END -->
 
 ## Why this toolkit

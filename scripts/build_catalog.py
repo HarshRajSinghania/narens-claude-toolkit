@@ -1,4 +1,4 @@
-"""Generate the README skill catalog and llms.txt from plugin metadata.
+"""Generate the README catalog (skills, mods, MCP servers) and llms.txt from the repo contents.
 
 Usage:
     python scripts/build_catalog.py            # rewrite README.md and llms.txt
@@ -15,22 +15,35 @@ END = "<!-- CATALOG:END -->"
 REGEN_HINT = "run `python scripts/build_catalog.py`"
 
 
+SECTIONS = (("skills", "Skills"), ("mods", "Mods"), ("servers", "MCP servers"))
+COMING_SOON = "_Coming soon._"
+
+
 def collect(root):
-    items = []
+    groups = {"skills": [], "mods": [], "servers": []}
     for pdir in common.list_plugin_dirs(root):
         meta = common.load_json(pdir / ".claude-plugin" / "plugin.json")
-        items.append({"name": meta["name"], "description": meta["description"]})
-    return items
+        item = {"name": meta["name"], "description": meta["description"]}
+        kinds = common.plugin_kinds(pdir)
+        if "skill" in kinds:
+            groups["skills"].append(item)
+        if "mod" in kinds:
+            groups["mods"].append(item)
+    for sdir in common.list_server_dirs(root):
+        groups["servers"].append(
+            {"name": sdir.name, "description": common.server_description(sdir) or ""}
+        )
+    return groups
 
 
 def _cell(text):
     return " ".join(text.replace("|", "\\|").split())
 
 
-def render_table(items):
+def render_plugin_table(items, label):
     if not items:
-        return "_The first skills are on the way. Star the repo to follow along._"
-    lines = ["| Skill | What it does | Install |", "| --- | --- | --- |"]
+        return COMING_SOON
+    lines = [f"| {label} | What it does | Install |", "| --- | --- | --- |"]
     for it in items:
         n = it["name"]
         lines.append(
@@ -40,24 +53,50 @@ def render_table(items):
     return "\n".join(lines)
 
 
-def render_llms(items):
+def render_server_table(items):
+    if not items:
+        return COMING_SOON
+    lines = ["| Server | What it does | Folder |", "| --- | --- | --- |"]
+    for it in items:
+        n = it["name"]
+        lines.append(
+            f"| [`{n}`](servers/{n}/README.md) | {_cell(it['description'])} | "
+            f"[`servers/{n}`](servers/{n}) |"
+        )
+    return "\n".join(lines)
+
+
+def render_catalog(groups):
+    return "\n\n".join(
+        [
+            "### Skills\n\n" + render_plugin_table(groups["skills"], "Skill"),
+            "### Mods\n\n" + render_plugin_table(groups["mods"], "Mod"),
+            "### MCP servers\n\n" + render_server_table(groups["servers"]),
+        ]
+    )
+
+
+def render_llms(groups):
     lines = [
         "# Naren's Claude Toolkit",
         "",
-        "> Original Claude Code skills and plugins by Naren. Install through the plugin "
-        f"marketplace `{common.GITHUB_USER}/{common.MARKETPLACE}`.",
-        "",
-        "## Skills",
+        "> Original Claude Code skills, mods and MCP servers by Naren. Install plugins through the "
+        f"plugin marketplace `{common.GITHUB_USER}/{common.MARKETPLACE}`.",
         "",
     ]
-    if items:
+    for key, heading in SECTIONS:
+        lines += [f"## {heading}", ""]
+        items = groups[key]
+        if not items:
+            lines += ["- Coming soon.", ""]
+            continue
+        folder = "servers" if key == "servers" else "plugins"
         for it in items:
             n = it["name"]
-            url = f"{common.REPO_URL}/blob/main/plugins/{n}/README.md"
+            url = f"{common.REPO_URL}/blob/main/{folder}/{n}/README.md"
             lines.append(f"- [{n}]({url}): {_cell(it['description'])}")
-    else:
-        lines.append("- Coming soon.")
-    return "\n".join(lines) + "\n"
+        lines.append("")
+    return "\n".join(lines).rstrip("\n") + "\n"
 
 
 def replace_between(text, new):
@@ -78,14 +117,14 @@ def check_outputs(root):
     else:
         try:
             text = common.read_text(readme)
-            expected = replace_between(text, render_table(items))
+            expected = replace_between(text, render_catalog(items))
         except UnicodeDecodeError as exc:
             errors.append(f"README.md: unreadable ({exc})")
         except ValueError as exc:
             errors.append(f"README.md: {exc}")
         else:
             if expected != text:
-                errors.append(f"README.md: skill catalog is out of date; {REGEN_HINT}")
+                errors.append(f"README.md: catalog is out of date; {REGEN_HINT}")
     llms = root / "llms.txt"
     try:
         llms_current = llms.is_file() and common.read_text(llms) == render_llms(items)
@@ -100,7 +139,7 @@ def build(root):
     root = Path(root)
     items = collect(root)
     readme = root / "README.md"
-    common.write_text(readme, replace_between(common.read_text(readme), render_table(items)))
+    common.write_text(readme, replace_between(common.read_text(readme), render_catalog(items)))
     common.write_text(root / "llms.txt", render_llms(items))
 
 
