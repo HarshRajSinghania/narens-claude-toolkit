@@ -30,7 +30,7 @@ def run_main(*argv):
 
 
 class ParseTests(unittest.TestCase):
-    def test_real_desktop_sleep_never(self):
+    def test_real_laptop_sleep_never(self):
         self.assertEqual(
             power_check.parse_powercfg_index(fixture("windows_sleep_real.txt")),
             {"ac": 0, "dc": 0},
@@ -42,11 +42,30 @@ class ParseTests(unittest.TestCase):
             {"ac": 1800, "dc": 900},
         )
 
-    def test_real_desktop_has_no_lid_setting(self):
+    def test_query_omits_the_hidden_lid_setting(self):
+        # `powercfg /query` leaves hidden settings out; this laptop's lid action is hidden.
         self.assertEqual(
-            power_check.parse_powercfg_index(fixture("windows_lid_real.txt")),
+            power_check.parse_powercfg_index(fixture("windows_lid_query_hidden_real.txt")),
             {"ac": None, "dc": None},
         )
+
+    def test_qh_shows_the_hidden_lid_setting(self):
+        self.assertEqual(
+            power_check.parse_powercfg_index(fixture("windows_lid_qh_real.txt")),
+            {"ac": 1, "dc": 1},
+        )
+
+    def test_hibernate_timeout_is_read(self):
+        self.assertEqual(
+            power_check.parse_powercfg_index(fixture("windows_hibernate_real.txt")),
+            {"ac": 0, "dc": 0xE100},
+        )
+
+    def test_battery_flag(self):
+        self.assertIs(power_check.battery_from_flag(128), False)
+        self.assertIsNone(power_check.battery_from_flag(255))
+        self.assertIs(power_check.battery_from_flag(1), True)
+        self.assertIs(power_check.battery_from_flag(9), True)
 
     def test_laptop_lid_values(self):
         self.assertEqual(
@@ -70,10 +89,51 @@ class ParseTests(unittest.TestCase):
 
 
 class SummarizeTests(unittest.TestCase):
-    def test_desktop_that_never_sleeps_keeps_awake(self):
-        res = power_check.summarize("windows", {"ac": 0.0, "dc": 0.0}, None)
+    def test_machine_without_a_battery_and_without_a_lid_setting_keeps_awake(self):
+        res = power_check.summarize("windows", {"ac": 0.0, "dc": 0.0}, None, has_battery=False)
         self.assertIs(res["keeps_awake"], True)
-        self.assertIn("lid close: no setting found", res["findings"])
+        self.assertTrue(any(f.startswith("lid close: no setting found") for f in res["findings"]))
+
+    def test_missing_lid_setting_on_a_machine_with_a_battery_is_unknown_not_yes(self):
+        for has_battery in (True, None):
+            with self.subTest(has_battery):
+                res = power_check.summarize(
+                    "windows", {"ac": 0.0, "dc": 0.0}, None, has_battery=has_battery
+                )
+                self.assertIsNone(res["keeps_awake"])
+                self.assertTrue(any("may be a laptop" in f for f in res["findings"]))
+
+    def test_a_hibernate_timeout_counts_as_sleeping(self):
+        res = power_check.summarize(
+            "windows",
+            {"ac": 0.0, "dc": 0.0},
+            {"ac": "do nothing", "dc": "do nothing"},
+            hibernate_after={"ac": 0.0, "dc": 960.0},
+            has_battery=True,
+        )
+        self.assertIs(res["keeps_awake"], False)
+        self.assertIn("hibernate timeout on battery: 960 minutes idle", res["findings"])
+
+    def test_no_hibernate_timeout_keeps_awake(self):
+        res = power_check.summarize(
+            "windows",
+            {"ac": 0.0, "dc": 0.0},
+            {"ac": "do nothing", "dc": "do nothing"},
+            hibernate_after={"ac": 0.0, "dc": 0.0},
+            has_battery=True,
+        )
+        self.assertIs(res["keeps_awake"], True)
+
+    def test_unreadable_hibernate_timeout_is_unknown(self):
+        res = power_check.summarize(
+            "windows",
+            {"ac": 0.0, "dc": 0.0},
+            {"ac": "do nothing", "dc": "do nothing"},
+            hibernate_after={"ac": None, "dc": None},
+            has_battery=True,
+        )
+        self.assertIsNone(res["keeps_awake"])
+        self.assertIn("hibernate timeout on power: could not be read", res["findings"])
 
     def test_laptop_with_sleep_timeouts_does_not(self):
         res = power_check.summarize(
@@ -90,7 +150,7 @@ class SummarizeTests(unittest.TestCase):
         self.assertIs(res["keeps_awake"], False)
 
     def test_unreadable_values_make_the_answer_unknown_not_yes(self):
-        res = power_check.summarize("windows", {"ac": None, "dc": 0.0}, None)
+        res = power_check.summarize("windows", {"ac": None, "dc": 0.0}, None, has_battery=False)
         self.assertIsNone(res["keeps_awake"])
         self.assertIn("sleep timeout on power: could not be read", res["findings"])
 
@@ -113,30 +173,55 @@ class SummarizeTests(unittest.TestCase):
 
 
 class MainTests(unittest.TestCase):
-    def patched(self, name, outputs):
+    def patched(self, name, outputs, battery=True):
         return (
             mock.patch.object(power_check, "platform_name", return_value=name),
             mock.patch.object(power_check, "run_command", side_effect=outputs),
+            mock.patch.object(power_check, "battery_present", return_value=battery),
         )
 
-    def test_windows_laptop_report(self):
-        p1, p2 = self.patched(
-            "windows",
-            [fixture("windows_sleep_laptop_synthetic.txt"), fixture("windows_lid_laptop_synthetic.txt")],
-        )
-        with p1, p2:
+    def laptop_outputs(self):
+        return [
+            fixture("windows_sleep_real.txt"),
+            fixture("windows_hibernate_real.txt"),
+            fixture("windows_lid_qh_real.txt"),
+        ]
+
+    def test_this_laptop_is_reported_as_not_keeping_awake(self):
+        p1, p2, p3 = self.patched("windows", self.laptop_outputs())
+        with p1, p2, p3:
             code, out, err = run_main("--json")
         data = json.loads(out)
         self.assertEqual((code, err), (0, ""))
+        self.assertEqual(data["sleep_after_minutes"], {"ac": 0.0, "dc": 0.0})
+        self.assertEqual(data["hibernate_after_minutes"], {"ac": 0.0, "dc": 960.0})
+        self.assertEqual(data["lid_close_action"], {"ac": "sleep", "dc": "sleep"})
+        self.assertIs(data["keeps_awake"], False)
+
+    def test_windows_laptop_synthetic_report(self):
+        p1, p2, p3 = self.patched(
+            "windows",
+            [
+                fixture("windows_sleep_laptop_synthetic.txt"),
+                fixture("windows_hibernate_real.txt"),
+                fixture("windows_lid_laptop_synthetic.txt"),
+            ],
+        )
+        with p1, p2, p3:
+            code, out, _ = run_main("--json")
+        data = json.loads(out)
         self.assertEqual(data["sleep_after_minutes"], {"ac": 30.0, "dc": 15.0})
         self.assertEqual(data["lid_close_action"], {"ac": "do nothing", "dc": "sleep"})
         self.assertIs(data["keeps_awake"], False)
 
-    def test_windows_desktop_text_report(self):
-        p1, p2 = self.patched(
-            "windows", [fixture("windows_sleep_real.txt"), fixture("windows_lid_real.txt")]
+    def test_text_report_for_a_machine_that_really_keeps_awake(self):
+        never = fixture("windows_sleep_real.txt")  # both indexes 0, reused as a zero hibernate
+        p1, p2, p3 = self.patched(
+            "windows",
+            [never, never, fixture("windows_lid_query_hidden_real.txt")],
+            battery=False,
         )
-        with p1, p2:
+        with p1, p2, p3:
             code, out, _ = run_main()
         self.assertEqual(code, 0)
         self.assertIn("os: windows", out)
@@ -145,25 +230,55 @@ class MainTests(unittest.TestCase):
         self.assertIn("caveat:", out)
         out.encode("ascii")
 
-    def test_a_failing_lid_query_is_tolerated(self):
-        p1, p2 = self.patched(
-            "windows", [fixture("windows_sleep_real.txt"), power_check.PowerError("no")]
-        )
-        with p1, p2:
+    def test_the_hidden_settings_are_queried_with_qh(self):
+        p1, p2, p3 = self.patched("windows", self.laptop_outputs())
+        with p1, p2 as run, p3:
+            run_main()
+        commands = [call.args[0] for call in run.call_args_list]
+        self.assertEqual([c[:2] for c in commands], [["powercfg", "/qh"]] * 3)
+        self.assertEqual([c[-1] for c in commands], ["STANDBYIDLE", "HIBERNATEIDLE", "LIDACTION"])
+
+    def test_query_is_the_fallback_when_qh_fails(self):
+        outputs = [power_check.PowerError("no /qh")] + self.laptop_outputs()
+        p1, p2, p3 = self.patched("windows", outputs)
+        with p1, p2 as run, p3:
             code, out, _ = run_main("--json")
         self.assertEqual(code, 0)
-        self.assertIsNone(json.loads(out)["lid_close_action"])
+        self.assertEqual(run.call_args_list[1].args[0][:2], ["powercfg", "/query"])
+        self.assertEqual(json.loads(out)["sleep_after_minutes"], {"ac": 0.0, "dc": 0.0})
+
+    def test_a_failing_lid_query_is_tolerated_and_unknown(self):
+        err = power_check.PowerError("no")
+        outputs = [fixture("windows_sleep_real.txt"), fixture("windows_sleep_real.txt"), err, err]
+        p1, p2, p3 = self.patched("windows", outputs, battery=True)
+        with p1, p2, p3:
+            code, out, _ = run_main("--json")
+        data = json.loads(out)
+        self.assertEqual(code, 0)
+        self.assertIsNone(data["lid_close_action"])
+        self.assertIsNone(data["keeps_awake"])
+
+    def test_a_failing_hibernate_query_is_unknown_not_an_error(self):
+        err = power_check.PowerError("no")
+        outputs = [fixture("windows_sleep_real.txt"), err, err, fixture("windows_lid_qh_real.txt")]
+        p1, p2, p3 = self.patched("windows", outputs)
+        with p1, p2, p3:
+            code, out, _ = run_main("--json")
+        data = json.loads(out)
+        self.assertEqual(code, 0)
+        self.assertEqual(data["hibernate_after_minutes"], {"ac": None, "dc": None})
 
     def test_a_failing_sleep_query_is_a_clean_error(self):
-        p1, p2 = self.patched("windows", [power_check.PowerError("powercfg failed (exit 1)")])
-        with p1, p2:
-            code, _, err = run_main()
+        err = power_check.PowerError("powercfg failed (exit 1)")
+        p1, p2, p3 = self.patched("windows", [err, err])
+        with p1, p2, p3:
+            code, _, stderr = run_main()
         self.assertEqual(code, 2)
-        self.assertTrue(err.startswith("error: powercfg failed"))
+        self.assertTrue(stderr.startswith("error: powercfg failed"))
 
     def test_macos_report(self):
-        p1, p2 = self.patched("macos", [fixture("pmset_synthetic.txt")])
-        with p1, p2:
+        p1, p2, p3 = self.patched("macos", [fixture("pmset_synthetic.txt")])
+        with p1, p2, p3:
             code, out, _ = run_main("--json")
         data = json.loads(out)
         self.assertEqual(code, 0)
@@ -171,8 +286,8 @@ class MainTests(unittest.TestCase):
         self.assertIs(data["keeps_awake"], False)
 
     def test_unsupported_os_is_a_clean_error(self):
-        p1, p2 = self.patched(None, [])
-        with p1, p2:
+        p1, p2, p3 = self.patched(None, [])
+        with p1, p2, p3:
             code, _, err = run_main()
         self.assertEqual(code, 2)
         self.assertIn("unsupported OS", err)

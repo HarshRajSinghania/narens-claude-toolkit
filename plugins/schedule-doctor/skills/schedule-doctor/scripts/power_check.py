@@ -47,6 +47,36 @@ def run_command(args):
     return done.stdout
 
 
+def battery_from_flag(flag):
+    """GetSystemPowerStatus BatteryFlag: 128 means no system battery, 255 means unknown."""
+    if flag == 255:
+        return None
+    return flag != 128
+
+
+def battery_present():
+    """True or False on Windows when it can be told, otherwise None."""
+    try:
+        import ctypes
+
+        class PowerStatus(ctypes.Structure):
+            _fields_ = [
+                ("ACLineStatus", ctypes.c_ubyte),
+                ("BatteryFlag", ctypes.c_ubyte),
+                ("BatteryLifePercent", ctypes.c_ubyte),
+                ("SystemStatusFlag", ctypes.c_ubyte),
+                ("BatteryLifeTime", ctypes.c_ulong),
+                ("BatteryFullLifeTime", ctypes.c_ulong),
+            ]
+
+        status = PowerStatus()
+        if not ctypes.windll.kernel32.GetSystemPowerStatus(ctypes.byref(status)):
+            return None
+    except (AttributeError, OSError, ImportError):
+        return None
+    return battery_from_flag(status.BatteryFlag)
+
+
 def parse_powercfg_index(text):
     found = {}
     pattern = r"Current (AC|DC) Power Setting Index:\s*0x([0-9a-fA-F]+)"
@@ -60,27 +90,35 @@ def parse_pmset_sleep(text):
     return int(match.group(1)) if match else None
 
 
-def summarize(os_name, sleep_after, lid_action=None):
+def summarize(os_name, sleep_after, lid_action=None, hibernate_after=None, has_battery=None):
     findings = []
     sleeps = False
     unknown = False
-    for source, minutes in sleep_after.items():
-        label = SOURCE_LABELS.get(source, source)
-        if minutes is None:
-            unknown = True
-            findings.append(f"sleep timeout {label}: could not be read")
-        elif minutes == 0:
-            findings.append(f"sleep timeout {label}: never")
-        else:
-            sleeps = True
-            findings.append(f"sleep timeout {label}: {minutes:g} minutes idle")
+    for kind, values in (("sleep", sleep_after), ("hibernate", hibernate_after)):
+        if values is None:
+            continue
+        for source, minutes in values.items():
+            label = SOURCE_LABELS.get(source, source)
+            if minutes is None:
+                unknown = True
+                findings.append(f"{kind} timeout {label}: could not be read")
+            elif minutes == 0:
+                findings.append(f"{kind} timeout {label}: never")
+            else:
+                sleeps = True
+                findings.append(f"{kind} timeout {label}: {minutes:g} minutes idle")
     if lid_action is None:
-        if os_name == "windows":
-            findings.append("lid close: no setting found")
-        else:
+        if os_name != "windows":
             findings.append(
                 "lid close: not readable (a closed MacBook lid sleeps it unless it is on power "
                 "with an external display)"
+            )
+        elif has_battery is False:
+            findings.append("lid close: no setting found (no battery, so likely a desktop)")
+        else:
+            unknown = True
+            findings.append(
+                "lid close: no setting found (this may be a laptop whose lid setting is hidden)"
             )
     else:
         for source, action in lid_action.items():
@@ -102,6 +140,7 @@ def summarize(os_name, sleep_after, lid_action=None):
     return {
         "os": os_name,
         "sleep_after_minutes": sleep_after,
+        "hibernate_after_minutes": hibernate_after,
         "lid_close_action": lid_action,
         "keeps_awake": keeps_awake,
         "findings": findings,
@@ -109,22 +148,40 @@ def summarize(os_name, sleep_after, lid_action=None):
     }
 
 
+def query_setting(subgroup, setting):
+    """`/qh` includes hidden settings (a laptop's lid action is one); `/query` is the fallback."""
+    scope = ["SCHEME_CURRENT", subgroup, setting]
+    try:
+        return run_command(["powercfg", "/qh"] + scope)
+    except PowerError:
+        return run_command(["powercfg", "/query"] + scope)
+
+
+def to_minutes(indexes):
+    return {key: None if value is None else value / 60 for key, value in indexes.items()}
+
+
 def collect():
     name = platform_name()
     if name == "windows":
-        sleep_text = run_command(["powercfg", "/query", "SCHEME_CURRENT", "SUB_SLEEP", "STANDBYIDLE"])
-        sleep_after = {
-            key: None if value is None else value / 60
-            for key, value in parse_powercfg_index(sleep_text).items()
-        }
+        sleep_after = to_minutes(parse_powercfg_index(query_setting("SUB_SLEEP", "STANDBYIDLE")))
         try:
-            lid_text = run_command(
-                ["powercfg", "/query", "SCHEME_CURRENT", "SUB_BUTTONS", "LIDACTION"]
-            )
+            hibernate_text = query_setting("SUB_SLEEP", "HIBERNATEIDLE")
+        except PowerError:
+            hibernate_text = ""
+        hibernate_after = to_minutes(parse_powercfg_index(hibernate_text))
+        try:
+            lid_text = query_setting("SUB_BUTTONS", "LIDACTION")
         except PowerError:
             lid_text = ""
         lid = {key: LID_ACTIONS.get(value) for key, value in parse_powercfg_index(lid_text).items()}
-        return summarize(name, sleep_after, None if all(v is None for v in lid.values()) else lid)
+        return summarize(
+            name,
+            sleep_after,
+            None if all(v is None for v in lid.values()) else lid,
+            hibernate_after,
+            battery_present(),
+        )
     if name == "macos":
         return summarize(name, {"any": parse_pmset_sleep(run_command(["pmset", "-g"]))})
     raise PowerError(
