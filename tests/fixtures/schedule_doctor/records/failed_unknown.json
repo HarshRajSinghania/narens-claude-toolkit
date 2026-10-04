@@ -1,0 +1,12 @@
+{
+  "_note": "SYNTHETIC: hand-made record, not captured from a real run.",
+  "surface": "routine",
+  "scheduled_for": "2026-10-04T07:00:00+00:00",
+  "started_at": "2026-10-04T07:00:02+00:00",
+  "ended_at": "2026-10-04T07:00:09+00:00",
+  "status": "failed",
+  "last_event": "error",
+  "error_text": "exit code 1",
+  "permission_denied_tool": null,
+  "machine_events": []
+}

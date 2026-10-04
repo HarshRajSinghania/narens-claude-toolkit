@@ -1,0 +1,12 @@
+{
+  "_note": "SYNTHETIC: hand-made record, not captured from a real run.",
+  "surface": "desktop",
+  "scheduled_for": "2026-10-04T07:00:00+00:00",
+  "started_at": null,
+  "ended_at": null,
+  "status": "missed",
+  "last_event": null,
+  "error_text": null,
+  "permission_denied_tool": null,
+  "machine_events": [{"kind": "lid-close", "at": "2026-10-03T22:10:00+00:00"}]
+}
