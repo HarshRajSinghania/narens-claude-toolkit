@@ -30,6 +30,9 @@ def rx(pattern):
     return re.compile(pattern, re.IGNORECASE)
 
 
+FILE_NAME = r"[\w./\\-]{1,60}\.(?:md|txt|json|csv|log|html|yaml|yml|py|js|ts|toml|cfg|ini)\b"
+
+
 # (tool name or None to use the matched text, advice, pattern). Every quantifier is bounded so the
 # patterns stay fast on a prompt of up to MAX_PROMPT_CHARS.
 TOOL_RULES = [
@@ -37,7 +40,10 @@ TOOL_RULES = [
     (
         "Bash(git push)",
         APPROVE_ONCE,
-        rx(r"\bgit\s+push\b|\bforce[- ]push\b|\bpush\s+(?:the\s+|my\s+)?(?:commits?|changes|branch)\b"),
+        rx(
+            r"\bgit\s+push\b|\bforce[- ]push\b|\bcommit\s+and\s+push\b"
+            r"|\bpush\s+(?:\w+\s+){0,2}(?:commits?|changes|branch|fix|code|work|origin|remote)\b"
+        ),
     ),
     (
         "Bash(destructive)",
@@ -53,6 +59,8 @@ TOOL_RULES = [
         rx(
             r"\bdeploy(?:ing)?\b"
             r"|\b(?:send|post|publish)\b[^.\n]{0,40}\b(?:email|e-mail|slack|discord|tweet|webhook|release)\b"
+            r"|\b(?:open|create|file|submit)\s+(?:a\s+|an\s+|the\s+)?(?:pull request|pr|issue|ticket)\b"
+            r"|\b(?:email|e-mail|dm|message|slack|notify)\s+(?:me|us|him|her|them|the team)\b"
         ),
     ),
     (
@@ -60,8 +68,9 @@ TOOL_RULES = [
         PRE_APPROVE,
         rx(
             r"\b(?:npm|npx|pnpm|yarn|pip3?|pytest|cargo|docker|kubectl|python3?|node|bash|powershell"
-            r"|curl|wget|git)\b"
-            r"|\bmake\s+(?:test|build|install|all)\b"
+            r"|curl|wget|git|gh|terraform|aws|gcloud|uv|deno|bun|ruff|mypy|eslint|tsc)\b"
+            r"|\bgo\s+(?:test|build|run|vet|mod)\b|\baz\s+\w+"
+            r"|\bmake\s+(?:test|build|install|all|lint|check|clean)\b"
             r"|\brun\s+(?:the\s+|a\s+|my\s+)?(?:tests?|script|command|build|migration)s?\b"
         ),
     ),
@@ -72,7 +81,18 @@ TOOL_RULES = [
             r"\b(?:write|create|save|edit|update|modify|append|overwrite)\b[^.\n]{0,60}"
             r"\b(?:files?|folders?|director(?:y|ies)|reports?|notes?|logs?)\b"
             r"|\b(?:write|save)\s+(?:it\s+)?to\b"
-            r"|\b(?:into|to)\s+[\w./\\-]{1,60}\.(?:md|txt|json|csv|log|html|yaml|yml)\b"
+            r"|\b(?:write|create|save|edit|update|modify|append|overwrite)\s+(?:to\s+|the\s+|my\s+)?"
+            + FILE_NAME
+            + r"|\b(?:in|into|to)\s+"
+            + FILE_NAME
+        ),
+    ),
+    (
+        "MCP connector (likely)",
+        PRE_APPROVE,
+        rx(
+            r"\b(?:gmail|google calendar|google drive|gcal|slack|notion|linear|jira|github|asana"
+            r"|figma|salesforce|hubspot|stripe)\b"
         ),
     ),
     (
@@ -82,15 +102,24 @@ TOOL_RULES = [
     ),
 ]
 
+# A guard has to be about time: a condition with no clock in it ("skip merge commits when ...",
+# "only run the tests if the build passed") is not one, and calling it one would hide the snippet.
+TIME_WORD = (
+    r"(?:\d{1,2}(?::\d{2})?\s*(?:am|pm)\b|\d+\s*(?:minutes?|hours?)\b|noon\b|midnight\b"
+    r"|scheduled\b|late\b|time\b)"
+)
 GUARD_PATTERNS = [
-    rx(r"\bskip\b[^.\n]{0,80}\b(?:if|when|unless)\b"),
+    rx(r"\bskip\b[^.\n]{0,80}\b(?:if|when|unless)\b[^.\n]{0,80}\b" + TIME_WORD),
     rx(
         r"\b(?:if|when)\b[^.\n]{0,100}"
-        r"\b(?:after|past|later than|more than \d+\s*(?:minutes?|hours?)|too late|late)\b[^.\n]{0,100}"
+        r"\b(?:(?:after|past|later than)\s+(?:\d{1,2}(?::\d{2})?\s*(?:am|pm)?\b|noon\b|midnight\b"
+        r"|the scheduled\b)|more than \d+\s*(?:minutes?|hours?)\b|too late\b|late\b)[^.\n]{0,100}"
         r"\b(?:skip|stop|abort|exit|do nothing)\b"
     ),
-    rx(r"\bonly\s+(?:run|act|proceed)\b[^.\n]{0,60}\b(?:if|before|between|within)\b"),
-    rx(r"\btoo late\b"),
+    rx(
+        r"\bonly\s+(?:run|act|proceed)\b[^.\n]{0,60}\b(?:if|before|between|within)\b[^.\n]{0,60}\b"
+        + TIME_WORD
+    ),
 ]
 
 STALENESS = rx(
@@ -167,16 +196,22 @@ def analyze(text, guard_hours=DEFAULT_GUARD_HOURS):
     }
 
 
+def ascii_safe(text):
+    """Matched snippets come from the prompt; a console on a legacy code page cannot print them all."""
+    return text.encode("ascii", "backslashreplace").decode("ascii")
+
+
 def render(res):
     out = ["tools (likely needs; a heuristic, not a guarantee):"]
     if not res["tools"]:
-        out.append("  none detected")
+        out.append("  none detected; ask the user what the task touches (this only reads the prompt text)")
     for t in res["tools"]:
         lines = ", ".join(str(n) for n in t["lines"])
-        out.append(f"  {t['tool']}: {t['advice']} (matched: {', '.join(t['matched'])}; line {lines})")
+        matched = ascii_safe(", ".join(t["matched"]))
+        out.append(f"  {t['tool']}: {t['advice']} (matched: {matched}; line {lines})")
     guard = res["time_guard"]
     if guard["present"]:
-        out.append(f"time guard: found ({guard['matched']!r} on line {guard['line']})")
+        out.append(f"time guard: found ({ascii_safe(guard['matched'])!r} on line {guard['line']})")
     else:
         out.append("time guard: missing")
         out.append(f"  paste this into the prompt (assumed {guard['hours']:g} hours; ask the user):")
@@ -191,11 +226,15 @@ def render(res):
 
 def read_prompt(path):
     try:
-        return Path(path).read_text(encoding="utf-8-sig")
+        raw = Path(path).read_bytes()
     except OSError as exc:
         raise PreflightError(f"cannot read {path}: {exc.strerror or exc}") from None
+    try:
+        # Windows PowerShell 5.1 writes UTF-16 with a byte order mark when it redirects with `>`.
+        text = raw.decode("utf-16" if raw[:2] in (b"\xff\xfe", b"\xfe\xff") else "utf-8-sig")
     except UnicodeDecodeError:
-        raise PreflightError(f"{path} is not UTF-8 text") from None
+        raise PreflightError(f"{path} is not UTF-8 or UTF-16 text") from None
+    return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
 def main(argv=None):

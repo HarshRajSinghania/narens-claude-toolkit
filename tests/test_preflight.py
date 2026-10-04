@@ -54,6 +54,31 @@ class ToolTests(unittest.TestCase):
             tool("Delete the old files.", "Bash(destructive)")["advice"], preflight.APPROVE_ONCE
         )
 
+    def test_tools_that_were_missed_are_detected(self):
+        cases = {
+            "Commit and push the fix.": "Bash(git push)",
+            "Edit README.md and tidy it.": "Write/Edit",
+            "Update CHANGELOG.md with the release notes.": "Write/Edit",
+            "Write a summary in summary.md.": "Write/Edit",
+            "Open a pull request with the result.": "External send or deploy",
+            "Open a pull request with gh pr create.": "Bash",
+            "Email me a digest of the results.": "External send or deploy",
+            "Message me on Slack when it is done.": "External send or deploy",
+            "Read my Gmail for invoices.": "MCP connector (likely)",
+            "Run go test ./... and report.": "Bash",
+            "terraform apply then aws s3 sync.": "Bash",
+            "Run make lint.": "Bash",
+        }
+        for text, expected in cases.items():
+            with self.subTest(text):
+                self.assertIn(expected, tool_names(text))
+
+    def test_connector_names_are_pre_approve(self):
+        self.assertEqual(
+            tool("Check Notion for new rows.", "MCP connector (likely)")["advice"],
+            preflight.PRE_APPROVE,
+        )
+
     def test_output_into_a_named_file_needs_write_access(self):
         for text in ("Summarise today results into notes.md", "Dump the rows to out/report.csv"):
             with self.subTest(text):
@@ -89,7 +114,7 @@ class GuardTests(unittest.TestCase):
             "If it's after 5pm, skip this run.",
             "Skip this run if more than 2 hours late.",
             "Only run if it is before noon.",
-            "Do nothing when it is too late to matter.",
+            "When it is too late to matter, do nothing.",
         ]
         for text in cases:
             with self.subTest(text):
@@ -97,6 +122,31 @@ class GuardTests(unittest.TestCase):
                 self.assertTrue(guard["present"])
                 self.assertIsNone(guard["snippet"])
                 self.assertEqual(guard["line"], 1)
+
+    def test_sentences_that_only_look_like_guards_are_not_guards(self):
+        cases = [
+            "Skip merge commits when listing them.",
+            "Only run the tests if the build passed.",
+            "If a file was modified after Friday, skip it.",
+            "It is never too late to tidy the backlog.",
+            "Skip the cache if it is corrupt.",
+        ]
+        for text in cases:
+            with self.subTest(text):
+                guard = self.guard(text)
+                self.assertFalse(guard["present"])
+                self.assertIsNotNone(guard["snippet"])
+
+    def test_more_real_guards_are_recognised(self):
+        cases = [
+            "Skip this run if it is later than 6pm.",
+            "If the time is after 17:30, stop.",
+            "Only run before noon.",
+            "If this run is more than 3 hours late, do nothing.",
+        ]
+        for text in cases:
+            with self.subTest(text):
+                self.assertTrue(self.guard(text)["present"])
 
     def test_a_bare_skip_is_not_a_guard(self):
         guard = self.guard("Skip the intro and summarise the news.")
@@ -156,6 +206,26 @@ class InputTests(unittest.TestCase):
         self.assertEqual(data["tools"][0]["lines"], [2])
         self.assertEqual(data["time_guard"]["line"], 3)
 
+    def test_non_ascii_prompt_gives_ascii_text_output(self):
+        text = "Write the r\u00e9sum\u00e9 \u2705 notes to notes.md\nIf it is after 5pm, skip \u2705.\n"
+        path = self.write(text.encode("utf-8"))
+        code, out, err = run_main("--prompt-file", path)
+        self.assertEqual((code, err), (0, ""))
+        out.encode("ascii")
+        self.assertIn("\\xe9", out)
+
+    def test_utf16_prompt_from_windows_powershell_is_read(self):
+        path = self.write("Run npm test.\nSummarise it.\n".encode("utf-16"))
+        code, out, err = run_main("--prompt-file", path, "--json")
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(json.loads(out)["tools"][0]["tool"], "Bash")
+
+    def test_undecodable_file_is_a_clean_error(self):
+        code, _, err = run_main("--prompt-file", self.write(b"\x80\x81\x82"))
+        self.assertEqual(code, 2)
+        self.assertIn("not UTF-8 or UTF-16 text", err)
+        self.assertNotIn("Traceback", err)
+
     def test_missing_file_is_a_clean_error(self):
         code, _, err = run_main("--prompt-file", "no-such-file.txt")
         self.assertEqual(code, 2)
@@ -165,6 +235,17 @@ class InputTests(unittest.TestCase):
     def test_empty_file_is_a_clean_error(self):
         code, _, err = run_main("--prompt-file", self.write(b""))
         self.assertEqual((code, err), (2, "error: the prompt is empty\n"))
+
+
+class NothingDetectedTests(unittest.TestCase):
+    def test_none_detected_asks_the_user_what_the_task_touches(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        path = Path(tmp.name) / "prompt.txt"
+        path.write_text("Think about the plan.\n", encoding="utf-8")
+        code, out, _ = run_main("--prompt-file", str(path))
+        self.assertEqual(code, 0)
+        self.assertIn("none detected; ask the user what the task touches", out)
 
 
 class OutputTests(unittest.TestCase):
