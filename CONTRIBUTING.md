@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for helping improve Naren's Claude Toolkit. Bug reports and skill ideas are welcome via issues.
+Thanks for helping improve Naren's Claude Toolkit. Bug reports and skill, mod and server ideas are welcome via issues.
 
 ## Adding a skill
 
@@ -9,6 +9,14 @@ python scripts/new_skill.py my-skill "Use when ..."
 ```
 
 This copies `template/` into `plugins/my-skill/`, registers it in `.claude-plugin/marketplace.json`, and refreshes the README catalog. Then edit `SKILL.md` and the plugin `README.md`.
+
+## Adding a mod
+
+A mod is a plugin whose behavior is a hooks module. There is no scaffold script yet: copy the structure of an existing plugin (`.claude-plugin/plugin.json`, `README.md`) and add `hooks/hooks.json` with a `modules` list pointing at your module file, then list the plugin in `.claude-plugin/marketplace.json`. `python scripts/validate.py` checks that `hooks.json` is valid and every listed module exists.
+
+## Adding an MCP server
+
+Create `servers/<name>/` with a `README.md` (the first line starting with `> ` is the one-line description shown in the catalog) and a `package.json` or `pyproject.toml`. Servers are not plugins and are not listed in `marketplace.json`. Run `python scripts/build_catalog.py` to add it to the README and `llms.txt`.
 
 ## Before opening a PR
 
