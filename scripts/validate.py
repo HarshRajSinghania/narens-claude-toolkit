@@ -75,12 +75,50 @@ def check_plugin(pdir):
             errors.append(f"{pj_rel}: must be a JSON object")
     if not (pdir / "README.md").is_file():
         errors.append(f"{rel}/README.md: missing")
-    skills = pdir / "skills"
-    skill_dirs = sorted(p for p in skills.iterdir() if p.is_dir()) if skills.is_dir() else []
-    if not skill_dirs:
-        errors.append(f"{rel}/skills: needs at least one skill directory")
-    for sdir in skill_dirs:
-        errors += check_skill(sdir, rel)
+    kinds = common.plugin_kinds(pdir)
+    if not kinds:
+        errors.append(f"{rel}: needs skills/ or hooks/hooks.json")
+    if "skill" in kinds:
+        for sdir in sorted(p for p in (pdir / "skills").iterdir() if p.is_dir()):
+            errors += check_skill(sdir, rel)
+    if "mod" in kinds:
+        errors += check_mod(pdir, rel)
+    return errors
+
+
+def check_mod(pdir, rel):
+    where = f"{rel}/hooks/hooks.json"
+    try:
+        data = common.load_json(pdir / "hooks" / "hooks.json")
+    except ValueError as exc:  # JSONDecodeError and UnicodeDecodeError are both ValueErrors
+        return [f"{where}: invalid JSON ({exc})"]
+    if not isinstance(data, dict):
+        return [f"{where}: must be a JSON object"]
+    modules = data.get("modules")
+    if (
+        not isinstance(modules, list)
+        or not modules
+        or not all(isinstance(m, str) and m for m in modules)
+    ):
+        return [f"{where}: 'modules' must be a non-empty list of file paths"]
+    return [
+        f"{where}: module {m!r} does not exist"
+        for m in modules
+        if not (pdir / "hooks" / m).is_file()
+    ]
+
+
+def check_server(sdir):
+    rel = f"servers/{sdir.name}"
+    errors = []
+    if not common.KEBAB.match(sdir.name):
+        errors.append(f"{rel}: directory name must be kebab-case")
+    if not (sdir / "README.md").is_file():
+        errors.append(f"{rel}/README.md: missing")
+    elif common.server_description(sdir) is None:
+        errors.append(f"{rel}/README.md: needs a first line starting with '> ' (the description)")
+    if not any((sdir / manifest).is_file() for manifest in common.SERVER_MANIFESTS):
+        errors.append(f"{rel}: needs package.json or pyproject.toml")
     return errors
 
 
@@ -132,6 +170,8 @@ def validate(root):
     errors = []
     for pdir in plugin_dirs:
         errors += check_plugin(pdir)
+    for sdir in common.list_server_dirs(root):
+        errors += check_server(sdir)
     errors += check_marketplace(root, plugin_dirs)
     if not errors:  # the catalog can only be rendered from valid plugin metadata
         errors += build_catalog.check_outputs(root)
