@@ -72,6 +72,7 @@ TOOL_RULES = [
             r"\b(?:write|create|save|edit|update|modify|append|overwrite)\b[^.\n]{0,60}"
             r"\b(?:files?|folders?|director(?:y|ies)|reports?|notes?|logs?)\b"
             r"|\b(?:write|save)\s+(?:it\s+)?to\b"
+            r"|\b(?:into|to)\s+[\w./\\-]{1,60}\.(?:md|txt|json|csv|log|html|yaml|yml)\b"
         ),
     ),
     (

@@ -1,12 +1,20 @@
 # schedule-doctor: a Claude Code skill by Naren
 
-> Use when the user is about to schedule a Claude task, or asks why a scheduled task, /loop, cron job or routine did not run, ran late, or stopped partway (for example 'will this scheduled task actually run?', 'why didn't my 7am task fire?', 'check this before I schedule it').
+> Make Claude scheduled tasks actually run: check a task before you schedule it, and find out why one did not fire.
 
 Part of [Naren's Claude Skills](https://github.com/NarenDawar/narens-claude-skills).
 
 ## When it triggers
 
-Describe the situations and example user phrasings that activate this skill.
+Ask things like "will this scheduled task actually run?", "check this before I schedule it", "why didn't my 7am task fire?", or "my scheduled task ran hours late". It covers Claude Desktop scheduled tasks, Claude Code session crons (`/loop`), and cloud routines.
+
+## What it does
+
+**Before you schedule:** reads the task prompt, lists the tools it will likely need so you can pre-approve them, adds a time guard so a late catch-up run does not act on stale data, and checks whether your machine keeps awake (sleep timeout and lid-close action).
+
+**After a run:** reads the run's outcome and tells you which of these happened: it halted on a tool nobody approved, the machine slept through it, it ran late as a catch-up, it failed with an error, or there is not enough data to say.
+
+Small stdlib-only Python scripts do the checking and the classifying, so the answers are not guesses. Nothing is edited without your yes.
 
 ## Install
 
@@ -23,9 +31,9 @@ Copy `plugins/schedule-doctor/skills/schedule-doctor` into `~/.claude/skills/`.
 
 ## Example
 
-**Before:** what Claude does without this skill.
+**Before:** you schedule "pull the latest build and git push the result" for 7am. The laptop sleeps, Desktop runs it at 10:12, and the push waits on a permission nobody approved.
 
-**After:** what Claude does with it.
+**After:** the skill flags `git push` as approve-once, notes "latest" as a staleness risk, adds "if this run started more than 2 hours late, stop and report", and shows that your machine sleeps after 15 minutes on battery.
 
 ---
 

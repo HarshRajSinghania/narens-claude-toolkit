@@ -54,6 +54,11 @@ class ToolTests(unittest.TestCase):
             tool("Delete the old files.", "Bash(destructive)")["advice"], preflight.APPROVE_ONCE
         )
 
+    def test_output_into_a_named_file_needs_write_access(self):
+        for text in ("Summarise today results into notes.md", "Dump the rows to out/report.csv"):
+            with self.subTest(text):
+                self.assertIn("Write/Edit", tool_names(text))
+
     def test_plain_prompt_needs_no_tools(self):
         self.assertEqual(tool_names("Summarise what I should focus on."), [])
 
