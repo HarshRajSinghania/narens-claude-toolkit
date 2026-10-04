@@ -15,10 +15,14 @@ from pathlib import Path
 
 LATE_MINUTES = 30
 SURFACES = ("desktop", "code-cron", "routine")
-SLEEP_KINDS = ("sleep", "lid-close")
-HALT_EVENTS = ("permission-denied", "tool-denied", "permission-required")
-FAILED_STATUSES = ("failed", "error", "errored", "timed-out", "timeout")
+SLEEP_KINDS = ("sleep", "hibernate", "lid-close")
+EVENT_KINDS = SLEEP_KINDS + ("wake",)
+# Words in `last_event` or `status` that mean the run stopped or is waiting on a permission.
+HALT_WORDS = ("permission", "denied", "approval", "approve")
+OK_STATUSES = ("completed", "succeeded", "success", "ok", "done", "finished")
+FAILED_STATUSES = ("failed", "error", "errored", "timed-out", "timeout", "aborted")
 MAX_ERROR_TEXT = 200
+MAX_STATUS_TEXT = 40
 
 
 class DiagnoseError(Exception):
@@ -42,6 +46,11 @@ def parse_time(value, field):
     return moment
 
 
+def norm(value):
+    """Lower-case, trimmed, with underscores as hyphens; anything that is not text becomes ''."""
+    return value.strip().lower().replace("_", "-") if isinstance(value, str) else ""
+
+
 def parse_events(raw):
     if raw is None:
         return []
@@ -51,10 +60,15 @@ def parse_events(raw):
     for i, item in enumerate(raw):
         if not isinstance(item, dict) or not isinstance(item.get("kind"), str):
             raise DiagnoseError(f"machine_events[{i}]: needs a string 'kind'")
+        kind = norm(item["kind"])
+        if kind not in EVENT_KINDS:
+            raise DiagnoseError(
+                f"machine_events[{i}]: kind {item['kind']!r} is not one of: " + ", ".join(EVENT_KINDS)
+            )
         at = parse_time(item.get("at"), f"machine_events[{i}].at")
         if at is None:
             raise DiagnoseError(f"machine_events[{i}]: needs an 'at' time")
-        events.append((at, item["kind"]))
+        events.append((at, kind))
     return sorted(events, key=lambda event: event[0])
 
 
@@ -85,7 +99,8 @@ def classify(record, late_minutes=LATE_MINUTES):
     if scheduled is None:
         raise DiagnoseError("scheduled_for is required")
     started = parse_time(record.get("started_at"), "started_at")
-    parse_time(record.get("ended_at"), "ended_at")  # validated, not used in the verdict
+    ended = parse_time(record.get("ended_at"), "ended_at")
+    status = norm(record.get("status"))
     events = parse_events(record.get("machine_events"))
 
     asleep = asleep_at(events, scheduled)
@@ -105,8 +120,8 @@ def classify(record, late_minutes=LATE_MINUTES):
 
     tool = record.get("permission_denied_tool")
     last_event = record.get("last_event")
-    last = last_event.strip().lower() if isinstance(last_event, str) else ""
-    if tool or last in HALT_EVENTS:
+    last = norm(last_event)
+    if tool or any(word in last or word in status for word in HALT_WORDS):
         evidence["permission_denied_tool"] = tool or None
         evidence["last_event"] = last_event
         what = f"the tool {tool}" if tool else "a tool"
@@ -138,15 +153,20 @@ def classify(record, late_minutes=LATE_MINUTES):
             f"(threshold {late_minutes:g}).{note} Anything it read may be stale.",
             evidence,
         )
-    status = record.get("status")
-    failed_status = isinstance(status, str) and status.strip().lower() in FAILED_STATUSES
-    if error_text or failed_status:
+    if error_text or status in FAILED_STATUSES:
         return result(
             "failed-unknown",
             "The run started on time but ended with an error that is not a permission halt.",
             evidence,
         )
-    return result("healthy", "The run started on time and ended without an error.", evidence)
+    if status in OK_STATUSES or (status == "" and ended is not None):
+        return result("healthy", "The run started on time and ended without an error.", evidence)
+    return result(
+        "unfinished-unknown",
+        "The run started on time but there is no sign it finished "
+        f"(status: {status[:MAX_STATUS_TEXT] or 'none'}, ended_at: {'set' if ended else 'missing'}).",
+        evidence,
+    )
 
 
 def render(res):
@@ -158,9 +178,14 @@ def render(res):
 
 def load_record(path):
     try:
-        text = Path(path).read_text(encoding="utf-8-sig")
+        raw = Path(path).read_bytes()
     except OSError as exc:
         raise DiagnoseError(f"cannot read {path}: {exc.strerror or exc}") from None
+    try:
+        # Windows PowerShell 5.1 writes UTF-16 with a byte order mark when it redirects with `>`.
+        text = raw.decode("utf-16" if raw[:2] in (b"\xff\xfe", b"\xfe\xff") else "utf-8-sig")
+    except UnicodeDecodeError:
+        raise DiagnoseError(f"{path} is not UTF-8 or UTF-16 text") from None
     try:
         return json.loads(text)
     except ValueError as exc:

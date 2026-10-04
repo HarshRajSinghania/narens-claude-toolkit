@@ -144,6 +144,64 @@ class ClassifyTests(unittest.TestCase):
         self.assertEqual(result["evidence"]["delay_minutes"], 0.1)
         self.assertEqual(result["evidence"]["scheduled_for"], "2026-10-04T07:00:00")
 
+    def test_status_vocabulary_decides_between_healthy_failed_and_unfinished(self):
+        cases = {
+            "completed": "healthy",
+            " COMPLETED ": "healthy",
+            "succeeded": "healthy",
+            "timed_out": "failed-unknown",
+            "Timed-Out": "failed-unknown",
+            "errored": "failed-unknown",
+            "cancelled": "unfinished-unknown",
+            "stopped": "unfinished-unknown",
+            "running": "unfinished-unknown",
+            "something new": "unfinished-unknown",
+        }
+        for status, verdict in cases.items():
+            with self.subTest(status):
+                self.assertEqual(self.verdict(rec(status=status)), verdict)
+
+    def test_no_status_is_healthy_only_when_the_run_has_an_end_time(self):
+        self.assertEqual(self.verdict(rec(status=None)), "healthy")
+        result = diagnose.classify(rec(status=None, ended_at=None))
+        self.assertEqual(result["verdict"], "unfinished-unknown")
+        self.assertIn("no sign it finished", result["why"])
+
+    def test_a_run_still_waiting_on_approval_is_a_permission_halt(self):
+        for status in ("waiting for approval", "permission-denied", "Permission_Required"):
+            with self.subTest(status):
+                self.assertEqual(
+                    self.verdict(rec(status=status, ended_at=None)), "permission-halt"
+                )
+
+    def test_last_event_wording_is_matched_loosely(self):
+        for event in ("permission_denied", "Waiting for permission to use Bash", "tool-denied"):
+            with self.subTest(event):
+                self.assertEqual(self.verdict(rec(last_event=event)), "permission-halt")
+
+    def test_machine_event_kinds_are_normalized(self):
+        for kind in ("Sleep", " SLEEP ", "hibernate", "Lid_Close"):
+            with self.subTest(kind):
+                events = [{"kind": kind, "at": "2026-10-03T22:10:00+00:00"}]
+                self.assertEqual(
+                    self.verdict(rec(started_at=None, machine_events=events)), "slept-through"
+                )
+
+    def test_wake_kind_is_case_insensitive_too(self):
+        events = [
+            {"kind": "sleep", "at": "2026-10-03T22:10:00+00:00"},
+            {"kind": "Wake", "at": "2026-10-04T06:00:00+00:00"},
+        ]
+        self.assertEqual(
+            self.verdict(rec(started_at=None, machine_events=events)), "never-ran-unknown"
+        )
+
+    def test_an_unrecognised_machine_event_kind_is_an_error_not_silently_dropped(self):
+        events = [{"kind": "reboot", "at": "2026-10-03T22:10:00+00:00"}]
+        with self.assertRaises(diagnose.DiagnoseError) as ctx:
+            diagnose.classify(rec(machine_events=events))
+        self.assertIn("sleep", str(ctx.exception))
+
     def test_invalid_records_raise_a_clear_error(self):
         cases = {
             "not an object": [],
@@ -171,6 +229,7 @@ class FixtureTests(unittest.TestCase):
         "late_catchup": "late-catchup",
         "never_ran_unknown": "never-ran-unknown",
         "failed_unknown": "failed-unknown",
+        "unfinished_unknown": "unfinished-unknown",
     }
 
     def test_each_fixture_gets_its_verdict_through_the_cli(self):
@@ -221,6 +280,32 @@ class CliTests(unittest.TestCase):
         code, out, _ = run_main("--record", path, "--json")
         self.assertEqual(code, 0)
         self.assertEqual(json.loads(out)["verdict"], "healthy")
+
+    def test_utf16_file_from_windows_powershell_is_read(self):
+        # PowerShell 5.1 `>` writes UTF-16LE with a byte order mark.
+        for encoding in ("utf-16", "utf-16-be"):
+            with self.subTest(encoding):
+                text = json.dumps(rec())
+                data = text.encode(encoding)
+                if encoding == "utf-16-be":
+                    data = b"\xfe\xff" + data
+                tmp = tempfile.TemporaryDirectory()
+                self.addCleanup(tmp.cleanup)
+                path = Path(tmp.name) / "record.json"
+                path.write_bytes(data)
+                code, out, err = run_main("--record", str(path), "--json")
+                self.assertEqual((code, err), (0, ""))
+                self.assertEqual(json.loads(out)["verdict"], "healthy")
+
+    def test_undecodable_file_is_a_clean_error_not_a_traceback(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        path = Path(tmp.name) / "bad.json"
+        path.write_bytes(b"\x80\x81\x82")
+        code, _, err = run_main("--record", str(path))
+        self.assertEqual(code, 2)
+        self.assertIn("not UTF-8 or UTF-16 text", err)
+        self.assertNotIn("Traceback", err)
 
     def test_negative_threshold_is_refused(self):
         code, _, err = run_main("--record", str(RECORDS / "healthy.json"), "--late-minutes", "-1")
