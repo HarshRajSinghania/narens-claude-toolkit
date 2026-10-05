@@ -221,3 +221,182 @@ def malformed_finding(index, entry):
         evidence=evidence,
         fix="Return each tool as an object with a non-empty string name.",
     )
+
+
+_TYPE_KEYS = ("type", "enum", "oneOf", "anyOf", "$ref")
+_MAX_DEPTH_SCAN = 50
+
+_TRIGGER = re.compile(
+    r"\b(?:one of|either|must be|can be|should be|options?|allowed values?|valid values?"
+    r"|possible values?|choices?|supported values?)\b[:\s]*",
+    re.IGNORECASE,
+)
+_LEAD = re.compile(r"^(?:(?:are|is)\s+)?(?:(?:the following|these|below)\b)?[:\s]*", re.IGNORECASE)
+_SPLIT = re.compile(r"\s*,\s*(?:or\s+|and\s+)?|\s+or\s+|\s*\|\s*|\s*/\s*", re.IGNORECASE)
+_SENTENCE_END = re.compile(r"\.(?:\s|$)|\n")
+_QUOTED = re.compile(r"""(['"`])([^'"`\n]{1,30})\1""")
+_ARTICLE = re.compile(r"^(?:a|an|the)\s", re.IGNORECASE)
+_MAX_VALUE_WORDS = 2
+_MAX_VALUES = 20
+
+
+def _clean_values(parts):
+    """The values in `parts`, or [] when any part looks like prose instead of a value."""
+    values = []
+    for part in parts:
+        value = part.strip().strip("'\"`()[]{}.,;:").strip()
+        if not value:
+            continue
+        if len(value.split()) > _MAX_VALUE_WORDS or _ARTICLE.match(value):
+            return []
+        values.append(value)
+    return values
+
+
+def extract_enum_values(text):
+    """Allowed values a description lists in prose ('one of: a, b'), in order; [] when none."""
+    if not isinstance(text, str):
+        return []
+    for match in _TRIGGER.finditer(text):
+        rest = _SENTENCE_END.split(text[match.end():], maxsplit=1)[0]
+        rest = _LEAD.sub("", rest, count=1).strip()
+        values = _clean_values(_SPLIT.split(rest))
+        if len(values) >= 2:
+            return values[:_MAX_VALUES]
+    quoted = []
+    for found in _QUOTED.finditer(text):
+        value = found.group(2).strip()
+        if value and value not in quoted:
+            quoted.append(value)
+    if len(quoted) >= 3:
+        return quoted[:_MAX_VALUES]
+    return []
+
+
+def schema_depth(schema, level=0):
+    """Levels of nested schemas below `schema` (properties, items, anyOf, oneOf, allOf).
+
+    A schema with no nested schema is 0. Scanning stops at a fixed depth, so a hostile or
+    runaway document cannot exhaust the stack.
+    """
+    if not isinstance(schema, dict):
+        return 0
+    if level >= _MAX_DEPTH_SCAN:
+        return 1
+    children = []
+    props = schema.get("properties")
+    if isinstance(props, dict):
+        children.extend(props.values())
+    items = schema.get("items")
+    if isinstance(items, dict):
+        children.append(items)
+    elif isinstance(items, list):
+        children.extend(items)
+    for key in ("anyOf", "oneOf", "allOf"):
+        options = schema.get(key)
+        if isinstance(options, list):
+            children.extend(options)
+    if not children:
+        return 0
+    return 1 + max(schema_depth(child, level + 1) for child in children)
+
+
+def _has_description(schema):
+    text = schema.get("description")
+    return isinstance(text, str) and bool(text.strip())
+
+
+def _describe(schema):
+    if schema is None:
+        return "missing"
+    if isinstance(schema, dict):
+        return f"type is {schema.get('type')!r}"
+    return f"a {type(schema).__name__}"
+
+
+def check_schema(tool):
+    """P001 to P006: the input schema and its top-level parameters."""
+    name = tool["name"]
+    schema = tool.get("inputSchema")
+    if not isinstance(schema, dict) or schema.get("type") != "object":
+        return [
+            finding(
+                "P004",
+                "high",
+                "inputSchema is missing or is not an object schema",
+                tool=name,
+                evidence=_describe(schema),
+                fix='Declare inputSchema as {"type": "object", "properties": {...}}.',
+                data={"action": "fix-input-schema"},
+            )
+        ]
+    found = []
+    raw = schema.get("properties")
+    props = raw if isinstance(raw, dict) else {}
+    for pname, pschema in props.items():
+        pschema = pschema if isinstance(pschema, dict) else {}
+        if not _has_description(pschema):
+            found.append(
+                finding(
+                    "P001",
+                    "medium",
+                    f"parameter '{pname}' has no description",
+                    tool=name,
+                    param=pname,
+                    fix="Say what the value means and what format it takes.",
+                    data={"action": "add-param-description"},
+                )
+            )
+        if not any(key in pschema for key in _TYPE_KEYS):
+            found.append(
+                finding(
+                    "P002",
+                    "medium",
+                    f"parameter '{pname}' has no type",
+                    tool=name,
+                    param=pname,
+                    fix="Declare its type, or an enum of the allowed values.",
+                    data={"action": "add-param-type"},
+                )
+            )
+        if pschema.get("type") == "string" and "enum" not in pschema:
+            values = extract_enum_values(pschema.get("description"))
+            if values:
+                found.append(
+                    finding(
+                        "P003",
+                        "medium",
+                        f"parameter '{pname}' lists its allowed values in prose but has no enum",
+                        tool=name,
+                        param=pname,
+                        evidence=", ".join(values),
+                        fix="Declare them as an enum so the model cannot invent other values.",
+                        data={"action": "add-enum", "values": values},
+                    )
+                )
+    required = schema.get("required")
+    if len(props) >= 2 and not (isinstance(required, list) and required):
+        found.append(
+            finding(
+                "P005",
+                "low",
+                f"{len(props)} parameters and no required list",
+                tool=name,
+                fix="List the parameters the tool cannot work without in required.",
+                data={"action": "add-required"},
+            )
+        )
+    depth = schema_depth(schema)
+    if depth > THRESHOLDS["max_nesting"]:
+        found.append(
+            finding(
+                "P006",
+                "low",
+                f"input schema is nested {depth} levels deep",
+                tool=name,
+                evidence=f"limit {THRESHOLDS['max_nesting']}",
+                fix="Flatten the parameters; deeply nested objects are easy to fill in wrongly.",
+                data={"depth": depth},
+            )
+        )
+    return found
