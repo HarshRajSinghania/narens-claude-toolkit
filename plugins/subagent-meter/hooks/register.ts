@@ -42,12 +42,16 @@ export const register: Register = on => {
     return result
   })
 
-  on('session.end', { reason: 'clear' }, async ($, e, next) => {
-    try {
-      await update($, stats, () => emptyStats())
-      $.ui.status(undefined)
-    } catch {
-      // Same rule: never break the session.
+  on('session.end', async ($, e, next) => {
+    // /clear and /resume both end the conversation while the process goes on under another
+    // session, and the counts in session state would otherwise carry over into it.
+    if (e.reason === 'clear' || e.reason === 'resume') {
+      try {
+        await update($, stats, () => emptyStats())
+        $.ui.status(undefined)
+      } catch {
+        // Same rule: never break the session.
+      }
     }
 
     return next(e)

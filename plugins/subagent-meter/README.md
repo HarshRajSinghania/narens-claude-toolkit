@@ -17,7 +17,7 @@ subagents 14x · 12% of output · 54% of all tokens · top Explore
 - **`54% of all tokens`**: the same share counting every token processed (fresh input, cache reads, cache writes and output).
 - **`top Explore`**: the agent type that used the most tokens.
 
-Read the two shares together. When "all tokens" is far above "output", the subagents are mostly re-reading context, not producing work: that gap is the context tax. The line disappears when no subagent has run, and resets on `/clear`.
+Read the two shares together. When "all tokens" is far above "output", the subagents are mostly re-reading context, not producing work: that gap is the context tax. The line disappears when no subagent has run, and resets on `/clear` and `/resume`.
 
 ## What it does not do
 

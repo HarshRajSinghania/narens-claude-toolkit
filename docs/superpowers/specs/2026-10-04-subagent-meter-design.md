@@ -11,7 +11,7 @@ The first mod in narens-claude-toolkit: a live status line that shows how much o
 1. After a subagent finishes its first turn, a status line appears and updates after each later turn.
 2. Its numbers match hand-computed fixtures (tokens added up the way this spec defines).
 3. The meter never changes, delays or breaks a turn, even if its own code fails.
-4. The counts survive a hot reload of the mod and reset on `/clear`.
+4. The counts survive a hot reload of the mod and reset on `/clear` and `/resume`.
 5. `claude plugin validate`, the mod's tests and the repo's `validate.py` all pass, and the mod is listed under Mods in the catalog.
 
 ## Decisions already made
@@ -60,7 +60,7 @@ One status line, refreshed after every counted turn:
 ### Lifetime
 
 - Counts live in session state, so a hot reload keeps them; `session.start` redraws the line from saved state.
-- `session.end` with `reason: 'clear'` resets the counts and removes the line.
+- `session.end` with `reason: 'clear'` or `reason: 'resume'` resets the counts and removes the line: both end the conversation while the process goes on under another session, and session state would otherwise carry the old session's counts into it.
 - Counts do not persist across sessions.
 
 ## Structure
@@ -97,7 +97,7 @@ README.md
 
 - `turn.complete`: `next(e)`, then record (type lookup for an unseen id, update state, redraw the line).
 - `session.start`: redraw from saved state.
-- `session.end` with `reason: 'clear'`: reset state and clear the line.
+- `session.end` with `reason: 'clear'` or `'resume'`: reset state and clear the line. Any other reason leaves the counts alone.
 
 ## Repo integration
 
