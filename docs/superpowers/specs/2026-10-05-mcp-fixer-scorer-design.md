@@ -49,8 +49,8 @@ This spec covers only sub-project 1. It is useful on its own, needs no model, an
 `python -m mcp_fixer score [options] (--tools-json FILE | -- COMMAND [ARGS...])`
 
 - Exactly one input mode: `--tools-json FILE` (the file is either `{"tools": [...]}` or a bare array) or the server command after `--`.
-- `--env KEY=VALUE` (repeatable): environment passed to the server in addition to a minimal base (`PATH`, `HOME`/`USERPROFILE`, `SYSTEMROOT`, `TEMP`/`TMP`).
-- `--timeout SECONDS` (default 30): per-request timeout and overall cap for the connection phase.
+- `--env KEY=VALUE` (repeatable): environment passed to the server in addition to a minimal base (`PATH`, `PATHEXT`, `COMSPEC`, `SYSTEMROOT`, `HOME`, `USERPROFILE`, `APPDATA`, `LOCALAPPDATA`, `TEMP`, `TMP`, `LANG`; the Windows and Node launchers need several of these).
+- `--timeout SECONDS` (default 30): per-request timeout; the whole connection is also capped at four times the timeout.
 - `--format text|json` (default `text`), `--out FILE` (when given, the report is written to FILE instead of stdout; errors still go to stderr).
 - `--min-score N`: exit code 1 when the score is below N.
 - Exit codes: 0 success, 1 score below `--min-score`, 2 usage or connection error with a one-line `error:` message on stderr.
@@ -70,7 +70,7 @@ JSON, `schemaVersion: 1`:
 }
 ```
 
-`serverName`, `serverVersion` and `protocolVersion` are null for the file mode. `data` holds machine-readable fix hints for the patcher (for example `{"action": "add-enum", "values": ["a", "b"]}`). The text format shows the same content for people: the score, a per-tool table, findings grouped by tool, and the metrics.
+`serverName`, `serverVersion` and `protocolVersion` are null for the file mode. The report also has a `notes` array of plain strings (for example `no tools listed`), and each `perTool` entry also carries `findings`, the number of findings about that tool. `data` holds machine-readable fix hints for the patcher (for example `{"action": "add-enum", "values": ["a", "b"]}`). The text format shows the same content for people: the score, a per-tool table, findings grouped by tool, and the metrics.
 
 ## Rules
 

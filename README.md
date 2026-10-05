@@ -58,7 +58,9 @@ Plugin names, versions and behavior are unchanged. Removing the old marketplace 
 
 ### MCP servers
 
-_Coming soon._
+| Server | What it does | Folder |
+| --- | --- | --- |
+| [`mcp-fixer`](servers/mcp-fixer/README.md) | Scores an MCP server's tool definitions with deterministic lint rules, so you can see what makes agents pick the wrong tool or waste tokens. | [`servers/mcp-fixer`](servers/mcp-fixer) |
 <!-- CATALOG:END -->
 
 ## Why this toolkit

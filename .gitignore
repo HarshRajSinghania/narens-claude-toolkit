@@ -2,3 +2,7 @@
 __pycache__/
 *.pyc
 plugins/*/.claude-plugin/types/
+servers/*/.venv/
+servers/*/build/
+servers/*/dist/
+*.egg-info/
