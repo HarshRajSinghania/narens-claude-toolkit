@@ -5,7 +5,7 @@ from pathlib import Path
 
 OWNER_NAME = "Naren"
 GITHUB_USER = "NarenDawar"
-MARKETPLACE = "narens-claude-skills"
+MARKETPLACE = "narens-claude-toolkit"
 REPO_URL = f"https://github.com/{GITHUB_USER}/{MARKETPLACE}"
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -63,3 +63,52 @@ def list_plugin_dirs(root):
     if not base.is_dir():
         return []
     return sorted(p for p in base.iterdir() if p.is_dir())
+
+
+SERVER_MANIFESTS = ("package.json", "pyproject.toml")
+
+
+def plugin_kinds(pdir):
+    """The kinds a plugin has, by its contents: "skill" (a skills/ folder with at least one
+    directory in it) and/or "mod" (hooks/hooks.json). plugin.json carries no type field."""
+    pdir = Path(pdir)
+    kinds = set()
+    skills = pdir / "skills"
+    if skills.is_dir() and any(p.is_dir() for p in skills.iterdir()):
+        kinds.add("skill")
+    hooks_json = pdir / "hooks" / "hooks.json"
+    if hooks_json.is_file() and _is_mod_hooks(hooks_json):
+        kinds.add("mod")
+    return kinds
+
+
+def _is_mod_hooks(path):
+    """Ordinary Claude Code command hooks use hooks/hooks.json too (under a "hooks" key). The file
+    makes a mod only when it names modules; one that cannot be parsed counts, so the parse error
+    is reported instead of the plugin being silently skipped."""
+    try:
+        data = load_json(path)
+    except ValueError:
+        return True
+    return not (isinstance(data, dict) and "modules" not in data)
+
+
+def list_server_dirs(root):
+    base = Path(root) / "servers"
+    if not base.is_dir():
+        return []
+    return sorted(p for p in base.iterdir() if p.is_dir())
+
+
+def server_description(sdir):
+    """The first README line that starts with '> ' (marker removed), or None."""
+    try:
+        text = read_text(Path(sdir) / "README.md")
+    except (OSError, UnicodeDecodeError):
+        return None
+    for line in text.splitlines():
+        if line.startswith("> "):
+            description = line[2:].strip()
+            if description:
+                return description
+    return None

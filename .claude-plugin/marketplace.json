@@ -1,11 +1,11 @@
 {
-  "name": "narens-claude-skills",
+  "name": "narens-claude-toolkit",
   "owner": {
     "name": "Naren",
     "url": "https://github.com/NarenDawar"
   },
   "metadata": {
-    "description": "Naren's Claude skills: unique, installable Agent Skills and Claude Code plugins.",
+    "description": "Naren's Claude toolkit: skills, mods and MCP servers for Claude Code.",
     "version": "0.1.0"
   },
   "plugins": [

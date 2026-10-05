@@ -2,11 +2,17 @@
 
 ## Layout
 
-One plugin per skill: `plugins/<name>/` containing `.claude-plugin/plugin.json`, `README.md`, and `skills/<name>/SKILL.md` (plus optional `references/` and `scripts/`).
+Three kinds of things live here, told apart by their contents (`plugin.json` has no type field):
+
+- **Skill:** a plugin in `plugins/<name>/` with `skills/<name>/SKILL.md` (plus optional `references/` and `scripts/`).
+- **Mod:** a plugin in `plugins/<name>/` whose behavior is a hooks module: `hooks/hooks.json` with a `modules` list naming exactly one file, as a relative path inside the plugin (relative to `hooks/`) that exists and ends in `.ts`, `.tsx`, `.jsx`, `.js`, `.mjs`, `.cjs`, `.mts` or `.cts`. A `hooks.json` with only a `hooks` key is ordinary Claude Code command hooks, not a mod. The validator checks these rules; `claude plugin validate <dir>` is the full check that the module loads.
+- **MCP server:** a folder `servers/<name>/` with a `README.md` whose first `> ` line is its one-line description, and a `package.json` or `pyproject.toml`. Servers are not plugins and are not listed in `.claude-plugin/marketplace.json`.
+
+A plugin can be a skill and a mod at once; it then appears in both catalog sections. Every plugin has `.claude-plugin/plugin.json` and a `README.md`, and needs `skills/` or a `hooks/hooks.json` with a `modules` list.
 
 ## Naming
 
-Plugin and skill names are kebab-case, and the skill directory name equals the `name` in `SKILL.md` frontmatter.
+Plugin, skill and server names are kebab-case, and a skill's directory name equals the `name` in its `SKILL.md` frontmatter.
 
 ## SKILL.md
 
@@ -18,10 +24,10 @@ Plugin and skill names are kebab-case, and the skill directory name equals the `
 
 `plugin.json` and `marketplace.json` set the author/owner to `Naren`. `plugin.json` also needs `version` and `description`.
 
-## Per-skill README
+## Per-plugin README
 
-Keyword-rich H1 ("<name>: a Claude Code skill by Naren"), a "When it triggers" section, install commands, and a before/after example.
+Keyword-rich H1 ("<name>: a Claude Code skill by Naren"), a "When it triggers" section, install commands, and a before/after example. A server README's first `> ` line is its description in the catalog.
 
 ## Generated files
 
-The README skill table and `llms.txt` come from `python scripts/build_catalog.py`. `python scripts/validate.py` fails if they are stale.
+The README catalog (skills, mods, MCP servers) and `llms.txt` come from `python scripts/build_catalog.py`. `python scripts/validate.py` fails if they are stale.

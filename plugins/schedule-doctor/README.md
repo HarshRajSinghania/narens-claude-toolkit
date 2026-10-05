@@ -2,7 +2,7 @@
 
 > Make Claude scheduled tasks actually run: check a task before you schedule it, and find out why one did not fire.
 
-Part of [Naren's Claude Skills](https://github.com/NarenDawar/narens-claude-skills).
+Part of [Naren's Claude Toolkit](https://github.com/NarenDawar/narens-claude-toolkit).
 
 ## When it triggers
 
@@ -21,8 +21,8 @@ Small stdlib-only Python scripts do the checking and the classifying, so the ans
 **Plugin marketplace (recommended)**
 
 ```text
-/plugin marketplace add NarenDawar/narens-claude-skills
-/plugin install schedule-doctor@narens-claude-skills
+/plugin marketplace add NarenDawar/narens-claude-toolkit
+/plugin install schedule-doctor@narens-claude-toolkit
 ```
 
 **Manual**

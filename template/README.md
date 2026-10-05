@@ -2,7 +2,7 @@
 
 > __DESCRIPTION__
 
-Part of [Naren's Claude Skills](https://github.com/NarenDawar/narens-claude-skills).
+Part of [Naren's Claude Toolkit](https://github.com/NarenDawar/narens-claude-toolkit).
 
 ## When it triggers
 
@@ -13,8 +13,8 @@ Describe the situations and example user phrasings that activate this skill.
 **Plugin marketplace (recommended)**
 
 ```text
-/plugin marketplace add NarenDawar/narens-claude-skills
-/plugin install __SKILL_NAME__@narens-claude-skills
+/plugin marketplace add NarenDawar/narens-claude-toolkit
+/plugin install __SKILL_NAME__@narens-claude-toolkit
 ```
 
 **Manual**

@@ -2,7 +2,7 @@
 
 > Log your predictions about dev decisions, grade them when the outcome is in, and see where you are overconfident.
 
-Part of [Naren's Claude Skills](https://github.com/NarenDawar/narens-claude-skills).
+Part of [Naren's Claude Toolkit](https://github.com/NarenDawar/narens-claude-toolkit).
 
 "This refactor takes 2 hours." "This approach won't scale." Developers make predictions like these all day and almost never check them. `decision-journal` keeps a private log of your predictions, asks you for the outcome later, and turns the results into a plain calibration report: how often your 80%-sure calls come true, and how far your time estimates run over.
 
@@ -24,8 +24,8 @@ It never logs, grades or nags on its own, and an offhand "this should take a few
 **Plugin marketplace (recommended)**
 
 ```text
-/plugin marketplace add NarenDawar/narens-claude-skills
-/plugin install decision-journal@narens-claude-skills
+/plugin marketplace add NarenDawar/narens-claude-toolkit
+/plugin install decision-journal@narens-claude-toolkit
 ```
 
 **Manual**

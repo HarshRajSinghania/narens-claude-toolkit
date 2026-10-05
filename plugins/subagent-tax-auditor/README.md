@@ -2,7 +2,7 @@
 
 > Find which subagents ate your Claude Code quota, and make the expensive ones cheaper.
 
-Part of [Naren's Claude Skills](https://github.com/NarenDawar/narens-claude-skills).
+Part of [Naren's Claude Toolkit](https://github.com/NarenDawar/narens-claude-toolkit).
 
 Every subagent starts with a large fixed context (system prompt, tool definitions, CLAUDE.md) that is sent again on each of its requests, so many small subagents can cost far more than the work they produce. `subagent-tax-auditor` reads your local session transcripts, splits usage between the main thread and each subagent type, explains the biggest spenders with the numbers behind each claim, proposes a cheaper model for your custom agents, and later checks whether the change helped.
 
@@ -20,8 +20,8 @@ Only when you ask. Example phrasings:
 **Plugin marketplace (recommended)**
 
 ```text
-/plugin marketplace add NarenDawar/narens-claude-skills
-/plugin install subagent-tax-auditor@narens-claude-skills
+/plugin marketplace add NarenDawar/narens-claude-toolkit
+/plugin install subagent-tax-auditor@narens-claude-toolkit
 ```
 
 **Manual**
