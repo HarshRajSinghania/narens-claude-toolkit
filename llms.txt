@@ -16,4 +16,4 @@
 
 ## MCP servers
 
-- Coming soon.
+- [mcp-fixer](https://github.com/NarenDawar/narens-claude-toolkit/blob/main/servers/mcp-fixer/README.md): Scores an MCP server's tool definitions with deterministic lint rules, so you can see what makes agents pick the wrong tool or waste tokens.
