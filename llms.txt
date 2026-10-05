@@ -12,7 +12,7 @@
 
 ## Mods
 
-- Coming soon.
+- [subagent-meter](https://github.com/NarenDawar/narens-claude-toolkit/blob/main/plugins/subagent-meter/README.md): A live status line showing how much of your session's tokens go to subagents, and which agent type uses the most.
 
 ## MCP servers
 

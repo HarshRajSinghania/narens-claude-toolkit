@@ -1,0 +1,14 @@
+{
+  "name": "subagent-meter",
+  "version": "0.1.0",
+  "description": "A live status line showing how much of your session's tokens go to subagents, and which agent type uses the most.",
+  "author": {
+    "name": "Naren",
+    "url": "https://github.com/NarenDawar"
+  },
+  "homepage": "https://github.com/NarenDawar/narens-claude-toolkit/tree/main/plugins/subagent-meter",
+  "repository": "https://github.com/NarenDawar/narens-claude-toolkit",
+  "license": "MIT",
+  "keywords": ["claude-code", "claude-mods", "status-line", "subagents"],
+  "types": "./types/index.d.ts"
+}

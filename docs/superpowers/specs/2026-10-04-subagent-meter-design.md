@@ -85,11 +85,12 @@ README.md
 - `addTurn(stats, { agentId?, type?, usage }) -> Stats`: returns a new value; a turn without `usage` returns the input unchanged.
 - `summarize(stats) -> { spawns, outputShare, allShare, topType } | undefined`: `undefined` when no agent has been seen.
 - `formatLine(summary) -> string`: exactly the line above.
+- `statusLine(stats) -> string | undefined`: `summarize` then `formatLine`, `undefined` when no agent has been seen; the hooks call this one function.
 
 ### State and concurrency (`register.ts`)
 
 - One state value, `{ plugin: 'subagent-meter', key: 'stats' }`, of type `Stats`. `plugin` and `key` are literals in source, as the engine requires.
-- Every update is a read, `addTurn`, then a write with `ifVersion`; if the write reports it lost the race, it re-reads and retries (at most 5 times). Concurrent subagent turns therefore never lose tokens.
+- Every update goes through the engine's `update($, atom, fn)`, which reads, applies the pure `addTurn`, writes with `ifVersion` and retries on a miss, so concurrent subagent turns never lose tokens. The agent type is looked up before the update (only for an id not yet in state), because the function passed to `update` must be pure.
 - State grows by roughly 100 bytes per distinct agent id. A session with thousands of agents stays well within limits; a cap is out of scope for this version.
 
 ### Hooks

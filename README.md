@@ -52,7 +52,9 @@ Plugin names, versions and behavior are unchanged. Removing the old marketplace 
 
 ### Mods
 
-_Coming soon._
+| Mod | What it does | Install |
+| --- | --- | --- |
+| [`subagent-meter`](plugins/subagent-meter/README.md) | A live status line showing how much of your session's tokens go to subagents, and which agent type uses the most. | `/plugin install subagent-meter@narens-claude-toolkit` |
 
 ### MCP servers
 
