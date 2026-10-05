@@ -49,7 +49,7 @@ This spec covers only sub-project 1. It is useful on its own, needs no model, an
 `python -m mcp_fixer score [options] (--tools-json FILE | -- COMMAND [ARGS...])`
 
 - Exactly one input mode: `--tools-json FILE` (the file is either `{"tools": [...]}` or a bare array) or the server command after `--`.
-- `--env KEY=VALUE` (repeatable): environment passed to the server in addition to a minimal base (`PATH`, `PATHEXT`, `COMSPEC`, `SYSTEMROOT`, `HOME`, `USERPROFILE`, `APPDATA`, `LOCALAPPDATA`, `TEMP`, `TMP`, `LANG`; the Windows and Node launchers need several of these).
+- `--env KEY=VALUE` (repeatable): environment passed to the server in addition to a minimal base (`PATH`, `PATHEXT`, `COMSPEC`, `LANG`, the temp folders, the home and profile variables, and the Windows system variables such as `SYSTEMROOT`, `SYSTEMDRIVE`, `PROGRAMDATA` and `PROGRAMFILES`; without the Windows ones a component started through `cmd.exe` cannot expand `%SystemDrive%` and creates a folder with that literal name in the working directory).
 - `--timeout SECONDS` (default 30): per-request timeout; the whole connection is also capped at four times the timeout.
 - `--format text|json` (default `text`), `--out FILE` (when given, the report is written to FILE instead of stdout; errors still go to stderr).
 - `--min-score N`: exit code 1 when the score is below N.

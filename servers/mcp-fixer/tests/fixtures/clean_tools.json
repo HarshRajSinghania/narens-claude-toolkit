@@ -1,0 +1,27 @@
+{
+  "tools": [
+    {
+      "name": "get_item",
+      "description": "Fetch a single item by its identifier.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "item_id": {"type": "string", "description": "Identifier of the item"}
+        },
+        "required": ["item_id"]
+      }
+    },
+    {
+      "name": "list_orders",
+      "description": "List the orders placed by one customer.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "customer_id": {"type": "string", "description": "Identifier of the customer"},
+          "status": {"type": "string", "description": "Order status", "enum": ["open", "shipped", "cancelled"]}
+        },
+        "required": ["customer_id"]
+      }
+    }
+  ]
+}

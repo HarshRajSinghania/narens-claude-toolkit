@@ -21,9 +21,16 @@ STDERR_TAIL_BYTES = 8192
 SHUTDOWN_WAIT_SECONDS = 2.0
 
 # What a spawned server inherits from this process; everything else must be passed with --env.
+# The Windows system variables are needed for Windows itself to find its folders: without
+# SYSTEMDRIVE and friends a component started through cmd.exe cannot expand %SystemDrive% and
+# creates a folder with that literal name in the working directory.
 BASE_ENV_KEYS = (
-    "PATH", "PATHEXT", "COMSPEC", "SYSTEMROOT", "HOME", "USERPROFILE",
-    "APPDATA", "LOCALAPPDATA", "TEMP", "TMP", "LANG",
+    "PATH", "PATHEXT", "COMSPEC", "SYSTEMROOT", "WINDIR", "SYSTEMDRIVE",
+    "HOME", "HOMEDRIVE", "HOMEPATH", "USERPROFILE", "USERNAME",
+    "APPDATA", "LOCALAPPDATA", "PROGRAMDATA", "ALLUSERSPROFILE",
+    "PROGRAMFILES", "PROGRAMFILES(X86)", "PROGRAMW6432",
+    "COMMONPROGRAMFILES", "COMMONPROGRAMFILES(X86)", "COMMONPROGRAMW6432",
+    "TEMP", "TMP", "LANG",
 )
 
 
@@ -74,8 +81,12 @@ class _Session:
         self.inbox = queue.Queue()
         self.stderr_tail = b""
         self.closed = False
-        for target in (self._read_stdout, self._read_stderr):
-            threading.Thread(target=target, daemon=True).start()
+        self.readers = [
+            threading.Thread(target=target, daemon=True)
+            for target in (self._read_stdout, self._read_stderr)
+        ]
+        for reader in self.readers:
+            reader.start()
 
     # --- reader threads -------------------------------------------------------------------
     def _read_stdout(self):
@@ -182,6 +193,12 @@ class _Session:
             return
         self.closed = True
         try:
+            self._stop_server()
+        finally:
+            self._release_pipes()
+
+    def _stop_server(self):
+        try:
             self.proc.stdin.close()
         except (OSError, ValueError):
             pass
@@ -198,6 +215,16 @@ class _Session:
             try:
                 self.proc.wait(timeout=SHUTDOWN_WAIT_SECONDS)
             except subprocess.TimeoutExpired:
+                pass
+
+    def _release_pipes(self):
+        """Let the reader threads see end of file, then close the pipes (no leaked handles)."""
+        for reader in self.readers:
+            reader.join(timeout=SHUTDOWN_WAIT_SECONDS)
+        for pipe in (self.proc.stdout, self.proc.stderr):
+            try:
+                pipe.close()
+            except (OSError, ValueError):
                 pass
 
 

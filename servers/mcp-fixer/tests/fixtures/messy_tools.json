@@ -1,0 +1,23 @@
+[
+  {
+    "name": "run",
+    "description": "Runs it",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "order": {"type": "string", "description": "Sort order, one of: asc, desc"},
+        "q": {}
+      }
+    }
+  },
+  {
+    "name": "searchItems",
+    "description": "",
+    "inputSchema": {"type": "object", "properties": {}}
+  },
+  {
+    "name": "list_items",
+    "description": "List the items in the store.",
+    "inputSchema": {"type": "object", "properties": {}}
+  }
+]

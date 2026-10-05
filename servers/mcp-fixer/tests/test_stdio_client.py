@@ -1,9 +1,11 @@
+import gc
 import json
 import os
 import sys
 import tempfile
 import time
 import unittest
+import warnings
 from pathlib import Path
 
 import support
@@ -67,6 +69,14 @@ class HappyPathTests(ClientCase):
         pid_file = self.dir / "pid"
         list_tools_stdio(self.command("normal", pid_file=pid_file), timeout=10)
         self.assertTrue(support.wait_until_gone(int(pid_file.read_text())))
+
+    def test_no_pipe_is_left_open_after_a_run(self):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            list_tools_stdio(self.command("normal"), timeout=10)
+            gc.collect()
+        leaks = [str(w.message) for w in caught if issubclass(w.category, ResourceWarning)]
+        self.assertEqual(leaks, [])
 
     def test_the_server_only_sees_the_base_environment_and_what_is_passed(self):
         os.environ["MCP_FIXER_SECRET_FOR_TEST"] = "do-not-leak"
@@ -145,6 +155,20 @@ class WindowsLauncherTests(ClientCase):
         )
         tools, _ = list_tools_stdio([str(shim)], timeout=10)
         self.assertEqual(tools, TOOLS)
+
+    def test_a_cmd_shim_leaves_no_stray_directories_in_the_working_directory(self):
+        # With too small an environment Windows cannot expand %SystemDrive% and friends, and a
+        # component cmd.exe starts creates a folder literally named "%SystemDrive%" in the cwd.
+        shim = self.dir / "launcher.cmd"
+        shim.write_text(
+            f'@echo off\r\n"{sys.executable}" "{support.FAKE_SERVER}" --mode normal --tools "{self.tools_file}"\r\n',
+            encoding="utf-8",
+        )
+        previous = os.getcwd()
+        os.chdir(self.dir)
+        self.addCleanup(os.chdir, previous)
+        list_tools_stdio([str(shim)], timeout=10)
+        self.assertEqual([entry.name for entry in self.dir.iterdir() if "%" in entry.name], [])
 
 
 class ResolveCommandTests(unittest.TestCase):
