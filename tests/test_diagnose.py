@@ -130,6 +130,33 @@ class ClassifyTests(unittest.TestCase):
         self.assertEqual(result["verdict"], "failed-unknown")
         self.assertEqual(result["evidence"]["error_text"], "exit code 1")
 
+    def test_whitespace_error_text_is_not_a_failure(self):
+        result = diagnose.classify(rec(error_text=" \t\n "))
+        self.assertEqual(result["verdict"], "healthy")
+        self.assertIsNone(result["evidence"]["error_text"])
+
+    def test_error_text_is_trimmed_before_truncation(self):
+        result = diagnose.classify(rec(error_text=" " * 250 + "exit code 1  "))
+        self.assertEqual(result["verdict"], "failed-unknown")
+        self.assertEqual(result["evidence"]["error_text"], "exit code 1")
+
+    def test_permission_tool_must_be_string_or_null(self):
+        for tool in (True, False, 0, 1, [], {}):
+            with self.subTest(tool=tool):
+                with self.assertRaisesRegex(diagnose.DiagnoseError, "permission_denied_tool"):
+                    diagnose.classify(rec(permission_denied_tool=tool))
+
+    def test_date_only_timestamps_are_refused_in_all_fields(self):
+        for field in ("scheduled_for", "started_at", "ended_at"):
+            with self.subTest(field=field):
+                with self.assertRaisesRegex(diagnose.DiagnoseError, field):
+                    diagnose.classify(rec(**{field: "2026-10-04"}))
+        with self.assertRaisesRegex(diagnose.DiagnoseError, "machine_events"):
+            diagnose.classify(rec(machine_events=[{"kind": "sleep", "at": "2026-10-04"}]))
+
+    def test_space_separated_timestamp_still_has_a_time_component(self):
+        self.assertEqual(self.verdict(rec(started_at="2026-10-04 07:00:05+00:00")), "healthy")
+
     def test_failed_status_without_error_text_is_failed_unknown(self):
         self.assertEqual(self.verdict(rec(status="Failed")), "failed-unknown")
 
@@ -274,6 +301,14 @@ class CliTests(unittest.TestCase):
         code, _, err = run_main("--record", self.write("{not json"))
         self.assertEqual(code, 2)
         self.assertIn("is not valid JSON", err)
+
+    def test_invalid_record_fields_are_clean_cli_errors(self):
+        for fields in ({"started_at": "2026-10-04"}, {"permission_denied_tool": True}):
+            with self.subTest(fields=fields):
+                code, out, err = run_main("--record", self.write(json.dumps(rec(**fields))), "--json")
+                self.assertEqual((code, out), (2, ""))
+                self.assertTrue(err.startswith("error:"))
+                self.assertEqual(len(err.splitlines()), 1)
 
     def test_byte_order_mark_is_ignored(self):
         path = self.write(json.dumps(rec()), encoding="utf-8-sig")
