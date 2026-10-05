@@ -100,6 +100,16 @@ class ToolTests(unittest.TestCase):
         found = tool("Intro\nrun npm test\nthen npm run build", "Bash")
         self.assertEqual(found["lines"], [2, 3])
 
+    def test_non_newline_separators_do_not_change_reported_lines(self):
+        for separator in ("\x0b", "\x0c", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029"):
+            with self.subTest(separator=repr(separator)):
+                result = preflight.analyze(
+                    f"a{separator}b\nRun npm test for today's build.\nIf it's after 5pm, skip."
+                )
+                self.assertEqual(result["tools"][0]["lines"], [2])
+                self.assertEqual(result["time_guard"]["line"], 3)
+                self.assertEqual(result["staleness_hints"][0]["lines"], [2])
+
     def test_a_long_url_is_cut_to_a_short_snippet(self):
         found = tool("Fetch https://example.com/" + "a" * 200, "WebFetch/WebSearch")
         self.assertTrue(all(len(m) <= preflight.MAX_SNIPPET for m in found["matched"]))

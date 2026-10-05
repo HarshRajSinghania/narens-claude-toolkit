@@ -181,7 +181,7 @@ def analyze(text, guard_hours=DEFAULT_GUARD_HOURS):
         raise PreflightError("the prompt is empty")
     if len(text) > MAX_PROMPT_CHARS:
         raise PreflightError(f"the prompt is longer than {MAX_PROMPT_CHARS} characters")
-    lines = text.splitlines()
+    lines = text.split("\n")
     matched, number = find_guard(lines)
     return {
         "tools": find_tools(lines),
