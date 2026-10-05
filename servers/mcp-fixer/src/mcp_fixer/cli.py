@@ -49,6 +49,8 @@ def load_tools_file(path):
         raise UsageError(f"{path} is not UTF-8 text") from None
     try:
         data = json.loads(text)
+    except RecursionError:
+        raise UsageError(f"{path} is not valid JSON (nested too deeply)") from None
     except ValueError as exc:
         raise UsageError(f"{path} is not valid JSON ({exc})") from None
     if isinstance(data, dict) and isinstance(data.get("tools"), list):
@@ -92,7 +94,10 @@ def run_score(args, command):
     else:
         tools, info = list_tools_stdio(command, env, args.timeout)
         source = {"kind": "stdio", **info}
-    result = score_tools(tools, source)
+    try:
+        result = score_tools(tools, source)
+    except RecursionError:
+        raise UsageError("the tool list is nested too deeply to score") from None
     text = render_json(result) if args.format == "json" else render_text(result)
     if args.out:
         try:

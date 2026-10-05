@@ -2,6 +2,7 @@
 import argparse
 import json
 import os
+import subprocess
 import sys
 import time
 
@@ -10,6 +11,7 @@ parser.add_argument("--mode", default="normal")
 parser.add_argument("--tools")
 parser.add_argument("--page-size", type=int, default=0)
 parser.add_argument("--pid-file")
+parser.add_argument("--child-pid-file")
 args = parser.parse_args()
 
 if args.pid_file:
@@ -43,8 +45,18 @@ def tools_page(params):
     return {"tools": TOOLS}
 
 
+if args.mode in ("grandchild", "grandchild-exit"):
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(20)"])
+    if args.child_pid_file:
+        with open(args.child_pid_file, "w", encoding="utf-8") as handle:
+            handle.write(str(child.pid))
+    if args.mode == "grandchild-exit":
+        sys.exit(4)
 if args.mode == "exit":
     sys.exit(4)
+if args.mode == "deep":
+    sys.stdout.write("[" * 5000 + "\n")
+    sys.stdout.flush()
 if args.mode == "noisy":
     for junk in ("Fake server starting up...", "{not json", "[1, 2, 3]", ""):
         sys.stdout.write(junk + "\n")
@@ -63,7 +75,7 @@ for line in sys.stdin:
     method = message.get("method")
     mid = message.get("id")
     if method is None:
-        if mid == "ping-1" and waiting_for_ping:
+        if mid == "ping-1" and waiting_for_ping and message.get("result") == {}:
             waiting_for_ping = False
             if held is not None:
                 send({"jsonrpc": "2.0", "id": held[0], "result": tools_page(held[1])})
@@ -74,6 +86,12 @@ for line in sys.stdin:
             time.sleep(60)
         if args.mode == "error":
             send({"jsonrpc": "2.0", "id": mid, "error": {"code": -32602, "message": "Unsupported protocol version"}})
+            continue
+        if args.mode == "multiline-error":
+            send({"jsonrpc": "2.0", "id": mid, "error": {"code": -32000, "message": "first line\nsecond line\n" + "y" * 3000}})
+            continue
+        if args.mode == "no-message-error":
+            send({"jsonrpc": "2.0", "id": mid, "error": {"code": -32001}})
             continue
         send(
             {
@@ -92,6 +110,9 @@ for line in sys.stdin:
         if args.mode == "ping":
             waiting_for_ping = True
             send({"jsonrpc": "2.0", "id": "ping-1", "method": "ping"})
+        if args.mode == "ping-flood":
+            for number in range(100000):
+                send({"jsonrpc": "2.0", "id": f"flood-{number}", "method": "ping"})
     elif method == "tools/list":
         if args.mode == "hang-list":
             time.sleep(60)

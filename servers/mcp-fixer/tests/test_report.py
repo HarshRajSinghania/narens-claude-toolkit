@@ -37,6 +37,39 @@ class JsonTests(unittest.TestCase):
         self.assertNotIn("\\u", text)
 
 
+class UntrustedTextTests(unittest.TestCase):
+    """Tool lists from remote servers are untrusted: nothing may steer the terminal."""
+
+    def render(self, **fields):
+        tool = {"name": "evil\x1b]0;pwned\x07\nfake line", "description": "bad\x1b[2Jtext",
+                "inputSchema": {"type": "object", "properties": {"p\x1b[31m": {}}}}
+        tool.update(fields)
+        source = {"kind": "stdio", "protocolVersion": "2025\x1b[0m", "serverName": "srv\x07", "serverVersion": "1\n2"}
+        return report_module.render_text(score.score_tools([tool], source))
+
+    def test_no_control_character_reaches_the_text_report(self):
+        text = self.render()
+        for char in text:
+            self.assertTrue(char == "\n" or ord(char) >= 32, repr(char))
+        self.assertNotIn("\x7f", text)
+
+    def test_escapes_are_shown_so_the_reader_can_see_what_was_there(self):
+        text = self.render()
+        self.assertIn("\\x1b", text)
+        self.assertIn("\\x07", text)
+        self.assertIn("\\n", text)
+
+    def test_a_newline_in_a_name_cannot_forge_a_line(self):
+        for line in self.render().splitlines():
+            self.assertFalse(line.startswith("fake line"), line)
+
+    def test_ordinary_non_ascii_text_is_left_alone(self):
+        tool = {"name": "recuperer", "description": "", "inputSchema": {"type": "object", "properties": {}}}
+        tool["description"] = ""
+        text = report_module.render_text(score.score_tools([dict(tool, name="日本語_tool")]))
+        self.assertIn("日本語_tool", text)
+
+
 class TextTests(unittest.TestCase):
     def setUp(self):
         self.text = report_module.render_text(score.score_tools(sample_tools()))

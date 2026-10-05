@@ -223,7 +223,7 @@ def malformed_finding(index, entry):
     )
 
 
-_TYPE_KEYS = ("type", "enum", "oneOf", "anyOf", "$ref")
+_TYPE_KEYS = ("type", "enum", "oneOf", "anyOf", "allOf", "const", "$ref")
 _MAX_DEPTH_SCAN = 50
 
 _TRIGGER = re.compile(
@@ -234,6 +234,11 @@ _TRIGGER = re.compile(
 _LEAD = re.compile(r"^(?:(?:are|is)\s+)?(?:(?:the following|these|below)\b)?[:\s]*", re.IGNORECASE)
 _SPLIT = re.compile(r"\s*,\s*(?:or\s+|and\s+)?|\s+or\s+|\s*\|\s*|\s*/\s*", re.IGNORECASE)
 _SENTENCE_END = re.compile(r"\.(?:\s|$)|\n")
+# Values after one of these are examples, not the allowed values: "such as 'en', 'fr' or 'de'".
+_EXAMPLE = re.compile(
+    r"(?<![\w])(?:e\.g\.|e\.g|eg|for example|for instance|such as|like|examples?)(?![\w])",
+    re.IGNORECASE,
+)
 _QUOTED = re.compile(r"""(['"`])([^'"`\n]{1,30})\1""")
 _ARTICLE = re.compile(r"^(?:a|an|the)\s", re.IGNORECASE)
 _MAX_VALUE_WORDS = 2
@@ -257,6 +262,9 @@ def extract_enum_values(text):
     """Allowed values a description lists in prose ('one of: a, b'), in order; [] when none."""
     if not isinstance(text, str):
         return []
+    example = _EXAMPLE.search(text)
+    if example:
+        text = text[: example.start()]
     for match in _TRIGGER.finditer(text):
         rest = _SENTENCE_END.split(text[match.end():], maxsplit=1)[0]
         rest = _LEAD.sub("", rest, count=1).strip()

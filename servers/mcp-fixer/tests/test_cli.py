@@ -1,6 +1,8 @@
 import contextlib
 import io
 import json
+import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -87,6 +89,34 @@ class FileModeTests(CliCase):
         path = self.write("na.json", json.dumps([{"name": "recuperer", "description": "", "inputSchema": {"type": "object", "properties": {}}, "title": "日本語"}], ensure_ascii=False))
         code, out, err = run("score", "--tools-json", path)
         self.assertEqual((code, err), (0, ""))
+
+
+class ConsoleEncodingTests(CliCase):
+    def test_a_legacy_console_encoding_does_not_crash_the_report(self):
+        name = "日本語_tool"  # cannot be encoded in cp1252
+        path = self.write("jp.json", json.dumps([{"name": name, "description": "", "inputSchema": {"type": "object", "properties": {}}}], ensure_ascii=False))
+        env = dict(os.environ, PYTHONIOENCODING="cp1252", PYTHONPATH=str(support.SRC))
+        done = subprocess.run(
+            [sys.executable, "-m", "mcp_fixer", "score", "--tools-json", path],
+            capture_output=True, env=env, timeout=60,
+        )
+        self.assertEqual(done.returncode, 0, done.stderr.decode("utf-8", "replace"))
+        self.assertIn(name, done.stdout.decode("utf-8"))
+
+
+class DeepJsonTests(CliCase):
+    def test_a_file_nested_too_deeply_to_parse_is_a_usage_error(self):
+        self.assert_usage_error("score", "--tools-json", self.write("deep.json", "[" * 5000), fragment="not valid JSON")
+
+    def test_a_schema_nested_very_deeply_never_gives_a_traceback(self):
+        depth = 900
+        schema = '{"type":"object","properties":{"x":' * depth + '{"type":"string"}' + "}}" * depth
+        text = '[{"name":"deep_tool","description":"A deeply nested tool schema here.","inputSchema":' + schema + "}]"
+        code, out, err = run("score", "--tools-json", self.write("deepschema.json", text))
+        self.assertIn(code, (0, 2))
+        self.assertNotIn("Traceback", err)
+        if code == 2:
+            self.assertEqual(err.count("\n"), 1)
 
 
 class MinScoreAndOutTests(CliCase):

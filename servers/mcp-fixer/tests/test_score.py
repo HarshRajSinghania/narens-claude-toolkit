@@ -43,6 +43,15 @@ class ScoreTests(unittest.TestCase):
         report = score.score_tools([broken, clean("beta_tool", "Fetch a single item by its identifier.")])
         self.assertEqual(report["score"], 88)
 
+    def test_half_up_is_not_bankers_rounding(self):
+        # tool scores 75 (D001, -25) and 90 (P001, -10): mean 82.5, half-up 83 (round() gives 82)
+        undescribed = clean("alpha_tool", "")
+        quiet = clean("beta_tool", "Fetch a single item by its identifier.")
+        quiet["inputSchema"]["properties"]["item_id"].pop("description")
+        report = score.score_tools([undescribed, quiet])
+        self.assertEqual(sorted(v["score"] for v in report["metrics"]["perTool"].values()), [75, 90])
+        self.assertEqual(report["score"], 83)
+
     def test_a_tool_never_scores_below_zero(self):
         props = {f"p{i}": {} for i in range(10)}  # each: P001 + P002 = -20, ten of them
         tool = {"name": "messy_tool", "description": "A tool with plenty of problems in it.",

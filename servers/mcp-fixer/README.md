@@ -28,7 +28,7 @@ PYTHONPATH=servers/mcp-fixer/src python -m mcp_fixer score --tools-json tools.js
 - `--min-score N` exits with code 1 when the score is below N, so a CI job can fail a build. Exit code 2 means a usage or connection error, with a one-line message.
 
 ```text
-$ python -m mcp_fixer score --tools-json tests/fixtures/messy_tools.json
+$ PYTHONPATH=servers/mcp-fixer/src python -m mcp_fixer score --tools-json servers/mcp-fixer/tests/fixtures/messy_tools.json
 mcp-fixer score: 70/100
 source: tool list file
 tools: 3, estimated definition size: 92 tokens
@@ -54,8 +54,8 @@ You are running whatever command you give it, exactly as when you add a server t
 | D003 | medium | a description is longer than 500 characters |
 | D004 | medium | two tools have near-identical descriptions (80% or more of their words shared) |
 | P001 | medium | a parameter has no description |
-| P002 | medium | a parameter has no type |
-| P003 | medium | a string parameter's description lists the allowed values but it has no `enum` |
+| P002 | medium | a parameter has no type (a `$ref`, `enum`, `oneOf`, `anyOf`, `allOf` or `const` counts as one) |
+| P003 | medium | a string parameter's description lists the allowed values but it has no `enum` (values after `e.g.`, `such as`, `like` or `for example` are examples and are ignored) |
 | P004 | high | the input schema is missing or is not an object schema |
 | P005 | low | two or more parameters and no `required` list |
 | P006 | low | the schema is nested more than 3 levels deep |
@@ -74,6 +74,11 @@ It is a lint score. It tells you the definitions have the kinds of problems that
 ## Report format
 
 `--format json` gives a stable report with `schemaVersion: 1` (source, score, metrics, findings with fix hints, notes) for other tools to consume. The planned patcher reads it.
+
+## Limits
+
+- On Linux and macOS the whole process group of a spawned server is stopped when scoring ends. On Windows a process the server started that outlives the server itself is not found and keeps running; the tool still finishes on time.
+- A server that floods the client with requests is cut off after 50 of them.
 
 ## Not in this version
 

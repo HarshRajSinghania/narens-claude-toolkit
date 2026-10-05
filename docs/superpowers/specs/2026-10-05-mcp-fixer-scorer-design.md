@@ -83,8 +83,8 @@ Every rule is a deterministic function over the tool JSON. Thresholds and weight
 | D003 | medium | a description is longer than 500 characters |
 | D004 | medium | two tools have near-identical descriptions: the Jaccard overlap of their lower-cased word sets is 0.8 or more (reported once per pair, on both tools) |
 | P001 | medium | a parameter has no description |
-| P002 | medium | a parameter has no `type` and no `enum`, `oneOf`, `anyOf` or `$ref` |
-| P003 | medium | a string parameter's description lists allowed values ("one of a, b, c", "either X or Y", "must be a, b or c", "can be ...", "options: ...", or three or more quoted values) and the parameter has no `enum`; the extracted values are the fix hint |
+| P002 | medium | a parameter has no `type` and no `enum`, `oneOf`, `anyOf`, `allOf`, `const` or `$ref` (older Pydantic emits `allOf` with a `$ref` for enum-typed fields) |
+| P003 | medium | a string parameter's description lists allowed values ("one of a, b, c", "either X or Y", "must be a, b or c", "can be ...", "options: ...", or three or more quoted values) and the parameter has no `enum`; the extracted values are the fix hint; values after an example marker (`e.g.`, `for example`, `for instance`, `such as`, `like`, `examples`) are examples, not allowed values, and are ignored |
 | P004 | high | `inputSchema` is missing or its `type` is not `object` |
 | P005 | low | a tool has two or more parameters and no `required` list |
 | P006 | low | a schema is nested more than 3 levels deep |
@@ -132,7 +132,8 @@ Seams the patcher will reuse: `score_tools(tools) -> report dict` (pure) and `li
 - Reads stdout line by line on a reader thread; a line that is not a JSON object is ignored; a JSON-RPC response is matched by id; a request from the server named `ping` is answered with `{}`; other server requests are answered with a method-not-found error; notifications are ignored.
 - Sends `initialize` with the latest protocol version it knows (2025-06-18), empty capabilities and `clientInfo` of `mcp-fixer`, waits for the response, sends `notifications/initialized`, then pages `tools/list` until there is no `nextCursor` (capped at 200 pages as a loop guard).
 - Any timeout, early exit, JSON-RPC error response or closed stdout raises a client error with a one-line message that includes the server's last stderr line when there is one.
-- Always shuts down: close stdin, wait briefly, terminate, then kill. Kills the whole process on timeout.
+- Always shuts down: close stdin, wait briefly, terminate, then kill. Kills the whole process tree on timeout. On POSIX the server leads its own process group, so descendants are stopped even after the server has exited; on Windows a descendant that outlives its server is not found (the tool still finishes on time, and the README says so). Pipes are closed only when no reader thread is still blocked on them.
+- At most 50 requests from the server are answered (a real server sends a ping or two); more is a flood and an error, because replies to a server that never reads would otherwise block the client's writes. Error messages are collapsed to one line of at most 200 characters.
 
 ## Testing
 

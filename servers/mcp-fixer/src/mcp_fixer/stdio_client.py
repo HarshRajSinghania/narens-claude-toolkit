@@ -19,6 +19,11 @@ MAX_PAGES = 200
 OVERALL_TIMEOUT_FACTOR = 4
 STDERR_TAIL_BYTES = 8192
 SHUTDOWN_WAIT_SECONDS = 2.0
+POLL_SECONDS = 0.25
+LAST_WORDS_SECONDS = 0.5
+MAX_SERVER_REQUESTS = 50  # a real server sends a ping or two; more is a flood
+INBOX_LIMIT = 1000  # messages waiting for us; the server is slowed down beyond this
+MAX_ERROR_TEXT = 200
 
 # What a spawned server inherits from this process; everything else must be passed with --env.
 # The Windows system variables are needed for Windows itself to find its folders: without
@@ -55,21 +60,33 @@ def child_environment(extra=None):
 
 
 def _kill_tree(proc, graceful):
-    """Stop the server and any children it started."""
-    if proc.poll() is not None:
-        return
-    try:
-        if os.name == "nt":
+    """Stop the server and any children it started.
+
+    On POSIX the server leads its own process group, so descendants are stopped even after the
+    server itself has exited. On Windows the tree is only known while the server runs: a
+    descendant that outlives its server is not found.
+    """
+    if os.name == "nt":
+        if proc.poll() is not None:
+            return
+        try:
             subprocess.run(
                 ["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True, timeout=10
             )
-            return
+        except (OSError, subprocess.SubprocessError):
+            try:
+                proc.kill()
+            except OSError:
+                pass
+        return
+    try:
         os.killpg(proc.pid, signal.SIGTERM if graceful else signal.SIGKILL)
-    except (OSError, subprocess.SubprocessError):
-        try:
-            proc.kill()
-        except OSError:
-            pass
+    except OSError:
+        if proc.poll() is None:
+            try:
+                proc.kill()
+            except OSError:
+                pass
 
 
 class _Session:
@@ -78,7 +95,8 @@ class _Session:
         self.timeout = timeout
         self.deadline = time.monotonic() + timeout * OVERALL_TIMEOUT_FACTOR
         self.next_id = 0
-        self.inbox = queue.Queue()
+        self.inbox = queue.Queue(maxsize=INBOX_LIMIT)
+        self.server_requests = 0
         self.stderr_tail = b""
         self.closed = False
         self.readers = [
@@ -94,7 +112,7 @@ class _Session:
             for raw in self.proc.stdout:
                 try:
                     message = json.loads(raw.decode("utf-8", errors="replace"))
-                except ValueError:
+                except (ValueError, RecursionError):  # not JSON, or nested too deeply to parse
                     continue
                 if isinstance(message, dict):
                     self.inbox.put(message)
@@ -144,6 +162,9 @@ class _Session:
         self._send(message)
 
     def _answer_server_request(self, message):
+        self.server_requests += 1
+        if self.server_requests > MAX_SERVER_REQUESTS:
+            raise ClientError("the server sent too many requests" + self.hint())
         if message.get("method") == "ping":
             self._send({"jsonrpc": "2.0", "id": message["id"], "result": {}})
         else:
@@ -151,6 +172,34 @@ class _Session:
                 {"jsonrpc": "2.0", "id": message["id"],
                  "error": {"code": -32601, "message": "method not supported by this client"}}
             )
+
+    def _error_text(self, error):
+        if isinstance(error, dict):
+            raw = error.get("message")
+            text = " ".join(str(raw).split()) if raw is not None else ""
+            if not text:
+                text = f"error code {error.get('code')}"
+        else:
+            text = " ".join(str(error).split())
+        return text[:MAX_ERROR_TEXT]
+
+    def _next_message(self, limit):
+        """The next incoming message, None when the server is gone, or raise on timeout."""
+        while True:
+            remaining = limit - time.monotonic()
+            if remaining <= 0:
+                return "timeout"
+            try:
+                return self.inbox.get(timeout=min(remaining, POLL_SECONDS))
+            except queue.Empty:
+                if self.proc.poll() is None:
+                    continue
+                # The server has exited, but a descendant may still hold its stdout open, so
+                # the reader never sees the end of the stream: give the pipe a moment, then stop.
+                try:
+                    return self.inbox.get(timeout=LAST_WORDS_SECONDS)
+                except queue.Empty:
+                    return None
 
     def request(self, method, params=None):
         self.next_id += 1
@@ -161,13 +210,9 @@ class _Session:
         self._send(message)
         limit = min(time.monotonic() + self.timeout, self.deadline)
         while True:
-            remaining = limit - time.monotonic()
-            if remaining <= 0:
+            incoming = self._next_message(limit)
+            if incoming == "timeout":
                 raise ClientError(f"timed out waiting for {method}" + self.hint())
-            try:
-                incoming = self.inbox.get(timeout=remaining)
-            except queue.Empty:
-                continue
             if incoming is None:
                 try:
                     code = self.proc.wait(timeout=1)
@@ -182,9 +227,7 @@ class _Session:
             if incoming.get("id") != request_id:
                 continue
             if "error" in incoming:
-                error = incoming["error"]
-                text = error.get("message") if isinstance(error, dict) else error
-                raise ClientError(f"{method} failed: {text}")
+                raise ClientError(f"{method} failed: {self._error_text(incoming['error'])}" + self.hint())
             result = incoming.get("result")
             return result if isinstance(result, dict) else {}
 
@@ -204,6 +247,7 @@ class _Session:
             pass
         try:
             self.proc.wait(timeout=SHUTDOWN_WAIT_SECONDS)
+            _kill_tree(self.proc, graceful=False)  # POSIX: stop descendants it left behind
             return
         except subprocess.TimeoutExpired:
             pass
@@ -219,9 +263,12 @@ class _Session:
 
     def _release_pipes(self):
         """Let the reader threads see end of file, then close the pipes (no leaked handles)."""
-        for reader in self.readers:
+        for reader, pipe in zip(self.readers, (self.proc.stdout, self.proc.stderr)):
             reader.join(timeout=SHUTDOWN_WAIT_SECONDS)
-        for pipe in (self.proc.stdout, self.proc.stderr):
+            if reader.is_alive():
+                # A descendant still holds this pipe open and the daemon thread is blocked in a
+                # read; closing it here would block too, so leave it to the thread.
+                continue
             try:
                 pipe.close()
             except (OSError, ValueError):

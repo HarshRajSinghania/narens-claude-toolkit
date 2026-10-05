@@ -131,6 +131,76 @@ class MisbehavingServerTests(ClientCase):
         self.assertIn("timed out", str(ctx.exception))
         self.assertLess(time.monotonic() - started, 10)
 
+    def test_a_descendant_holding_the_pipes_does_not_hang_the_tool(self):
+        child_pid_file = self.dir / "child-pid"
+        self.addCleanup(self.kill_child, child_pid_file)
+        started = time.monotonic()
+        tools, _ = list_tools_stdio(
+            self.command("grandchild", "--child-pid-file", str(child_pid_file)), timeout=10
+        )
+        self.assertEqual(tools, TOOLS)
+        self.assertLess(time.monotonic() - started, 12)  # the descendant sleeps 20 s
+        if os.name != "nt":  # on POSIX the whole process group is stopped
+            self.assertTrue(support.wait_until_gone(int(child_pid_file.read_text())))
+
+    def test_a_dead_server_whose_descendant_holds_stdout_is_reported_as_exited(self):
+        child_pid_file = self.dir / "child-pid"
+        self.addCleanup(self.kill_child, child_pid_file)
+        started = time.monotonic()
+        with self.assertRaises(ClientError) as ctx:
+            list_tools_stdio(self.command("grandchild-exit", "--child-pid-file", str(child_pid_file)), timeout=10)
+        self.assertIn("exited with code 4", str(ctx.exception))
+        self.assertLess(time.monotonic() - started, 9)
+
+    def test_a_multiline_error_is_one_short_line(self):
+        with self.assertRaises(ClientError) as ctx:
+            list_tools_stdio(self.command("multiline-error"), timeout=5)
+        message = str(ctx.exception)
+        self.assertNotIn("\n", message)
+        self.assertLess(len(message), 300)
+        self.assertIn("first line second line", message)
+
+    def test_an_error_without_a_message_names_its_code(self):
+        with self.assertRaises(ClientError) as ctx:
+            list_tools_stdio(self.command("no-message-error"), timeout=5)
+        self.assertIn("-32001", str(ctx.exception))
+        self.assertNotIn("None", str(ctx.exception))
+
+    def test_a_server_flooding_us_with_requests_is_cut_off(self):
+        started = time.monotonic()
+        with self.assertRaises(ClientError) as ctx:
+            list_tools_stdio(self.command("ping-flood"), timeout=3)
+        self.assertIn("too many requests", str(ctx.exception))
+        self.assertLess(time.monotonic() - started, 8)
+
+    def test_a_line_too_deeply_nested_for_the_json_parser_is_ignored(self):
+        tools, _ = list_tools_stdio(self.command("deep"), timeout=10)
+        self.assertEqual(tools, TOOLS)
+
+    def test_the_stderr_tail_is_capped_and_keeps_the_end(self):
+        proc = stdio_client._spawn(
+            [sys.executable, "-c", "import sys\nfor i in range(100000): sys.stderr.write('line %d\\n' % i)"],
+            stdio_client.child_environment(),
+        )
+        session = stdio_client._Session(proc, 10)
+        proc.wait(timeout=30)
+        session.close()
+        self.assertLessEqual(len(session.stderr_tail), stdio_client.STDERR_TAIL_BYTES)
+        self.assertIn(b"line 99999", session.stderr_tail)
+
+    def kill_child(self, pid_file):
+        if not pid_file.exists():
+            return
+        pid = int(pid_file.read_text())
+        if os.name == "nt":
+            import subprocess
+            subprocess.run(["taskkill", "/PID", str(pid), "/F"], capture_output=True)
+        else:
+            try:
+                os.kill(pid, 9)
+            except OSError:
+                pass
+
     def test_a_command_that_does_not_exist(self):
         with self.assertRaises(ClientError) as ctx:
             list_tools_stdio(["definitely-not-a-real-command-xyz"], timeout=5)

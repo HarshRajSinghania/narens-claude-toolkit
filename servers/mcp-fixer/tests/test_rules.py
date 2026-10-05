@@ -225,6 +225,26 @@ class EnumExtractionTests(unittest.TestCase):
             with self.subTest(text):
                 self.assertEqual(rules.extract_enum_values(text), [])
 
+    def test_examples_are_not_allowed_values(self):
+        for text in (
+            "Comma-separated list of labels, e.g. 'bug', 'enhancement', 'docs'",
+            "Timezone, e.g. 'UTC', 'America/New_York', 'Europe/London'",
+            "Glob pattern such as '*.py', '**/*.ts', 'src/*'",
+            "Supports operators like 'AND', 'OR', 'NOT'",
+            "Language code such as 'en', 'fr' or 'de'",
+            "For example one of: a, b",
+            "Examples: 'x', 'y', 'z'",
+            "Region, for instance 'eu', 'us' or 'ap'",
+        ):
+            with self.subTest(text):
+                self.assertEqual(rules.extract_enum_values(text), [])
+
+    def test_a_real_list_before_an_example_is_still_found(self):
+        self.assertEqual(rules.extract_enum_values("One of: asc, desc (e.g. asc)"), ["asc", "desc"])
+
+    def test_words_that_merely_contain_a_marker_do_not_cut_the_text(self):
+        self.assertEqual(rules.extract_enum_values("Unlikely to change. One of: a, b"), ["a", "b"])
+
     def test_at_most_twenty_values(self):
         text = "One of: " + ", ".join(f"v{i}" for i in range(30))
         self.assertEqual(len(rules.extract_enum_values(text)), 20)
@@ -293,6 +313,14 @@ class SchemaRuleTests(unittest.TestCase):
 
     def test_p002_not_raised_when_enum_oneof_anyof_or_ref_stand_in_for_type(self):
         for extra in ({"enum": ["a", "b"]}, {"oneOf": [{"type": "string"}]}, {"anyOf": [{"type": "string"}]}, {"$ref": "#/x"}):
+            with self.subTest(extra):
+                prop = {"description": "A value"}
+                prop.update(extra)
+                self.assertEqual(rules.check_schema(with_params(q=prop)), [])
+
+    def test_p002_not_raised_for_allof_or_const(self):
+        # older Pydantic emits allOf with a $ref for an enum-typed field; const pins one value
+        for extra in ({"allOf": [{"$ref": "#/definitions/Color"}]}, {"const": "fixed"}):
             with self.subTest(extra):
                 prop = {"description": "A value"}
                 prop.update(extra)
