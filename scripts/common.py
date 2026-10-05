@@ -76,9 +76,21 @@ def plugin_kinds(pdir):
     skills = pdir / "skills"
     if skills.is_dir() and any(p.is_dir() for p in skills.iterdir()):
         kinds.add("skill")
-    if (pdir / "hooks" / "hooks.json").is_file():
+    hooks_json = pdir / "hooks" / "hooks.json"
+    if hooks_json.is_file() and _is_mod_hooks(hooks_json):
         kinds.add("mod")
     return kinds
+
+
+def _is_mod_hooks(path):
+    """Ordinary Claude Code command hooks use hooks/hooks.json too (under a "hooks" key). The file
+    makes a mod only when it names modules; one that cannot be parsed counts, so the parse error
+    is reported instead of the plugin being silently skipped."""
+    try:
+        data = load_json(path)
+    except ValueError:
+        return True
+    return not (isinstance(data, dict) and "modules" not in data)
 
 
 def list_server_dirs(root):

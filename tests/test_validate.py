@@ -1,5 +1,6 @@
 import contextlib
 import io
+import json
 import shutil
 import tempfile
 import unittest
@@ -270,13 +271,73 @@ class ModTests(unittest.TestCase):
         self.assertHasError("hooks.json: must be a JSON object")
 
     def test_modules_must_be_a_non_empty_list_of_non_empty_strings(self):
-        for bad in ('{}', '{"modules": "./register.ts"}', '{"modules": []}',
+        for bad in ('{"modules": "./register.ts"}', '{"modules": []}',
                     '{"modules": [5]}', '{"modules": [""]}', '{"modules": ["./a.ts", null]}'):
             with self.subTest(bad):
                 shutil.rmtree(self.root, ignore_errors=True)
                 self.root.mkdir(exist_ok=True)
                 self.repo_with_mod(hooks_json=bad)
                 self.assertHasError("'modules' must be a non-empty list of file paths")
+
+    def test_hooks_json_without_modules_is_not_a_mod(self):
+        # Ordinary Claude Code command hooks live in hooks/hooks.json too.
+        import build_catalog
+        helpers.make_valid_repo(self.root, ["alpha"])
+        helpers.add_mod_files(
+            self.root / "plugins/alpha", modules=(), hooks_json='{"hooks": {"SessionStart": []}}'
+        )
+        build_catalog.build(self.root)
+        self.assertEqual(self.errors(), [])
+        self.assertEqual(build_catalog.collect(self.root)["mods"], [])
+
+    def test_a_plugin_with_only_ordinary_hooks_is_neither_kind(self):
+        for text in ('{"hooks": {}}', "{}"):
+            with self.subTest(text):
+                shutil.rmtree(self.root, ignore_errors=True)
+                self.root.mkdir(exist_ok=True)
+                helpers.make_valid_repo(self.root, [], mods=["alpha-mod"])
+                (self.root / "plugins/alpha-mod/hooks/hooks.json").write_text(text)
+                self.assertHasError("needs skills/ or hooks/hooks.json with a 'modules' list")
+
+    def test_two_modules_are_refused(self):
+        self.repo_with_mod(modules=("a.ts", "b.ts"))
+        self.assertHasError("must list exactly one module")
+
+    def test_absolute_module_paths_are_refused(self):
+        for bad in ("/etc/x.ts", "C:/x.ts", "C:\\x.ts"):
+            with self.subTest(bad):
+                shutil.rmtree(self.root, ignore_errors=True)
+                self.root.mkdir(exist_ok=True)
+                self.repo_with_mod(hooks_json=json.dumps({"modules": [bad]}))
+                self.assertHasError("must be a relative path")
+
+    def test_module_path_may_not_leave_the_plugin(self):
+        self.repo_with_mod(hooks_json='{"modules": ["../../outside.ts"]}')
+        (self.root / "plugins/outside.ts").write_text("export const register = () => {};\n")
+        self.assertHasError("leaves the plugin directory")
+
+    def test_module_suffix_must_be_one_claude_code_loads(self):
+        for name in ("readme.md", "tool.json", "x.py"):
+            with self.subTest(name):
+                shutil.rmtree(self.root, ignore_errors=True)
+                self.root.mkdir(exist_ok=True)
+                self.repo_with_mod(modules=(name,))
+                self.assertHasError("must end in one of")
+
+    def test_every_loadable_suffix_is_accepted(self):
+        for suffix in (".ts", ".tsx", ".jsx", ".js", ".mjs", ".cjs", ".mts", ".cts"):
+            with self.subTest(suffix):
+                shutil.rmtree(self.root, ignore_errors=True)
+                self.root.mkdir(exist_ok=True)
+                self.repo_with_mod(modules=(f"register{suffix}",))
+                self.assertEqual(self.errors(), [])
+
+    def test_module_in_a_subfolder_is_accepted(self):
+        plugin = self.repo_with_mod()
+        (plugin / "hooks/sub").mkdir()
+        (plugin / "hooks/sub/x.ts").write_text("export const register = () => {};\n")
+        (plugin / "hooks/hooks.json").write_text('{"modules": ["./sub/x.ts"]}')
+        self.assertEqual(self.errors(), [])
 
     def test_missing_module_file(self):
         plugin = self.repo_with_mod()

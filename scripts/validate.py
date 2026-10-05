@@ -4,11 +4,14 @@ Usage: python scripts/validate.py [repo_root]
 Exits 1 and prints one `ERROR <path>: <problem>` line per violation.
 """
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import build_catalog  # noqa: E402
 import common  # noqa: E402
+
+# Claude Code loads a hooks module only when its file has one of these suffixes.
+MOD_SUFFIXES = (".ts", ".tsx", ".jsx", ".js", ".mjs", ".cjs", ".mts", ".cts")
 
 
 def check_skill(sdir, rel):
@@ -77,7 +80,7 @@ def check_plugin(pdir):
         errors.append(f"{rel}/README.md: missing")
     kinds = common.plugin_kinds(pdir)
     if not kinds:
-        errors.append(f"{rel}: needs skills/ or hooks/hooks.json")
+        errors.append(f"{rel}: needs skills/ or hooks/hooks.json with a 'modules' list")
     if "skill" in kinds:
         for sdir in sorted(p for p in (pdir / "skills").iterdir() if p.is_dir()):
             errors += check_skill(sdir, rel)
@@ -101,11 +104,24 @@ def check_mod(pdir, rel):
         or not all(isinstance(m, str) and m for m in modules)
     ):
         return [f"{where}: 'modules' must be a non-empty list of file paths"]
-    return [
-        f"{where}: module {m!r} does not exist"
-        for m in modules
-        if not (pdir / "hooks" / m).is_file()
-    ]
+    if len(modules) != 1:
+        return [
+            f"{where}: 'modules' must list exactly one module "
+            "(Claude Code loads one hooks module per plugin)"
+        ]
+    module = modules[0]
+    if PurePosixPath(module).is_absolute() or PureWindowsPath(module).is_absolute():
+        return [f"{where}: module {module!r} must be a relative path"]
+    if not (pdir / "hooks" / module).resolve().is_relative_to(pdir.resolve()):
+        return [f"{where}: module {module!r} leaves the plugin directory"]
+    errors = []
+    if Path(module).suffix not in MOD_SUFFIXES:
+        errors.append(
+            f"{where}: module {module!r} must end in one of: " + ", ".join(MOD_SUFFIXES)
+        )
+    if not (pdir / "hooks" / module).is_file():
+        errors.append(f"{where}: module {module!r} does not exist")
+    return errors
 
 
 def check_server(sdir):
