@@ -1,10 +1,61 @@
 """Shared test fixtures. Importing this module puts scripts/ on sys.path."""
 import json
+import re
+import subprocess
 import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
+
+
+OLD_NAMES = ("narens-claude-skills", "naren's claude skills")
+OLD_NAME_EXEMPT = {"tests/test_repo.py", "tests/helpers.py"}
+FALLBACK_SKIP = {".git", ".superpowers", "__pycache__", "node_modules", ".venv", "venv"}
+
+
+def _repo_files(root):
+    """Tracked files when root is a git checkout, otherwise every file outside cache folders."""
+    root = Path(root)
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(root), "ls-files", "-z"], capture_output=True, check=True, timeout=30
+        ).stdout.decode("utf-8")
+        files = [root / name for name in out.split("\0") if name]
+    except (OSError, subprocess.SubprocessError, UnicodeDecodeError):
+        files = []
+    if not files:
+        files = [
+            f for f in root.rglob("*") if FALLBACK_SKIP.isdisjoint(f.relative_to(root).parts)
+        ]
+    return [f for f in files if f.is_file()]
+
+
+def _without_allowed(rel, text):
+    """Drop the places the old name is meant to appear: the README migration section and the
+    CHANGELOG entry that announces the rename."""
+    if rel == "README.md":
+        text = re.sub(r"## Moving from narens-claude-skills.*?(?=\n## |\Z)", "", text, flags=re.S)
+    elif rel == "CHANGELOG.md":
+        text = re.sub(r"### Changed\n.*?(?=\n### |\n## |\Z)", "", text, count=1, flags=re.S)
+    return text
+
+
+def find_old_name(root):
+    """Files still carrying the old repo name, outside history and the migration notes."""
+    root = Path(root)
+    found = []
+    for path in _repo_files(root):
+        rel = path.relative_to(root).as_posix()
+        if rel.startswith("docs/superpowers/") or rel in OLD_NAME_EXEMPT:
+            continue
+        try:
+            text = path.read_text(encoding="utf-8-sig")
+        except (OSError, UnicodeDecodeError):
+            continue
+        lowered = _without_allowed(rel, text).lower()
+        found += [f"{rel}: {name}" for name in OLD_NAMES if name in lowered]
+    return found
 
 
 def write_plugin(

@@ -56,14 +56,14 @@ template/           the skill template (unchanged)
 `common.plugin_kinds(pdir)` returns the set of kinds a plugin has:
 
 - `skill` when `skills/` contains at least one directory (so a directory missing its `SKILL.md` is reported with that specific error);
-- `mod` when `hooks/hooks.json` exists.
+- `mod` when `hooks/hooks.json` exists and either cannot be parsed or has a `modules` key. A `hooks.json` with only a `hooks` key is ordinary Claude Code command hooks and is not a mod.
 
 A plugin may be both. A plugin with neither is an error: `needs skills/ or hooks/hooks.json`. This replaces today's "needs at least one skill directory".
 
 ### Validator (`validate.py`)
 
 - Plugin checks (name equals directory, `version`, `description`, author `Naren`, README present) are unchanged, as are the skill checks for any plugin with `skills/`.
-- A plugin with `hooks/hooks.json` gets mod checks: the file is valid JSON; `modules` is a non-empty list of non-empty strings; each listed path, resolved relative to `hooks/`, exists as a file. A failure names the plugin, the file and the problem.
+- A plugin with `hooks/hooks.json` gets mod checks: the file is valid JSON; `modules` is a non-empty list of non-empty strings naming exactly one module (Claude Code loads one hooks module per plugin); the path is relative, stays inside the plugin, ends in `.ts`, `.tsx`, `.jsx`, `.js`, `.mjs`, `.cjs`, `.mts` or `.cts`, and resolves relative to `hooks/` to an existing file. These rules were confirmed against `claude plugin validate`. A failure names the plugin, the file and the problem.
 - `servers/<name>/` checks: the name is kebab-case; `README.md` exists; at least one of `package.json` or `pyproject.toml` exists; the README has a first `> ` line (the description source).
 - `marketplace.json` checks are unchanged: every plugin in `plugins/` is listed, no entry is missing a directory. Servers are not listed and not required to be.
 

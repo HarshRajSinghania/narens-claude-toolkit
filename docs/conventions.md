@@ -5,10 +5,10 @@
 Three kinds of things live here, told apart by their contents (`plugin.json` has no type field):
 
 - **Skill:** a plugin in `plugins/<name>/` with `skills/<name>/SKILL.md` (plus optional `references/` and `scripts/`).
-- **Mod:** a plugin in `plugins/<name>/` whose behavior is a hooks module: `hooks/hooks.json` with a non-empty `modules` list of file paths (relative to `hooks/`) that exist.
+- **Mod:** a plugin in `plugins/<name>/` whose behavior is a hooks module: `hooks/hooks.json` with a `modules` list naming exactly one file, as a relative path inside the plugin (relative to `hooks/`) that exists and ends in `.ts`, `.tsx`, `.jsx`, `.js`, `.mjs`, `.cjs`, `.mts` or `.cts`. A `hooks.json` with only a `hooks` key is ordinary Claude Code command hooks, not a mod. The validator checks these rules; `claude plugin validate <dir>` is the full check that the module loads.
 - **MCP server:** a folder `servers/<name>/` with a `README.md` whose first `> ` line is its one-line description, and a `package.json` or `pyproject.toml`. Servers are not plugins and are not listed in `.claude-plugin/marketplace.json`.
 
-A plugin can be a skill and a mod at once; it then appears in both catalog sections. Every plugin has `.claude-plugin/plugin.json` and a `README.md`, and needs `skills/` or `hooks/hooks.json`.
+A plugin can be a skill and a mod at once; it then appears in both catalog sections. Every plugin has `.claude-plugin/plugin.json` and a `README.md`, and needs `skills/` or a `hooks/hooks.json` with a `modules` list.
 
 ## Naming
 

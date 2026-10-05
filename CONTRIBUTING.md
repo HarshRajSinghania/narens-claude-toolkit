@@ -12,7 +12,7 @@ This copies `template/` into `plugins/my-skill/`, registers it in `.claude-plugi
 
 ## Adding a mod
 
-A mod is a plugin whose behavior is a hooks module. There is no scaffold script yet: copy the structure of an existing plugin (`.claude-plugin/plugin.json`, `README.md`) and add `hooks/hooks.json` with a `modules` list pointing at your module file, then list the plugin in `.claude-plugin/marketplace.json`. `python scripts/validate.py` checks that `hooks.json` is valid and every listed module exists.
+A mod is a plugin whose behavior is a hooks module. There is no scaffold script yet: copy the structure of an existing plugin (`.claude-plugin/plugin.json`, `README.md`) and add `hooks/hooks.json` with a `modules` list pointing at your module file, then list the plugin in `.claude-plugin/marketplace.json`. `python scripts/validate.py` checks that `hooks.json` is valid, names exactly one module, and that the module is a relative path inside the plugin that exists and has a suffix Claude Code loads. Run `claude plugin validate plugins/<name>` for the full check that the module loads.
 
 ## Adding an MCP server
 
