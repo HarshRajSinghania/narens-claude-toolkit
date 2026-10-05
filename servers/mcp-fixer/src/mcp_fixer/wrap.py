@@ -4,9 +4,12 @@
 bytes. Standard library only.
 """
 import json
+import subprocess
 import sys
+import threading
 
 from . import patch_format
+from .stdio_client import _kill_tree, _spawn, child_environment, resolve_command
 
 
 def _stderr_log(text):
@@ -134,3 +137,81 @@ class Router:
         for name in sorted(self.entries):
             if name not in self.seen:
                 self._warn(("missing", name), f"tool {name!r} is in the patch but the server never listed it")
+
+
+SHUTDOWN_GRACE_SECONDS = 5.0
+_OUTPUT_JOIN_SECONDS = 2.0
+
+
+def _exit_code(returncode):
+    return returncode if returncode is not None and 0 <= returncode <= 255 else 1
+
+
+def run_wrapper(patch, command, allow_stale=False, stdin=None, stdout=None, log=None):
+    """Run `command` behind the patch: client on `stdin`/`stdout`, real server on pipes.
+
+    Returns the exit code for the wrapper process. Raises ClientError when the server cannot be
+    started.
+    """
+    stdin = stdin if stdin is not None else sys.stdin.buffer
+    stdout = stdout if stdout is not None else sys.stdout.buffer
+    router = Router(patch, allow_stale, log)
+    proc = _spawn(resolve_command(command), child_environment(inherit=True), stderr=None)
+    done = threading.Event()
+    out_lock = threading.Lock()
+
+    def server_to_client():
+        try:
+            for raw in proc.stdout:
+                data = router.server_line(raw)
+                with out_lock:
+                    stdout.write(data)
+                    stdout.flush()
+        except (OSError, ValueError):
+            pass
+        finally:
+            done.set()
+
+    def client_to_server():
+        try:
+            for raw in stdin:
+                proc.stdin.write(router.client_line(raw))
+                proc.stdin.flush()
+        except (OSError, ValueError):
+            pass
+        finally:
+            try:
+                proc.stdin.close()
+            except (OSError, ValueError):
+                pass
+            done.set()
+
+    output_thread = threading.Thread(target=server_to_client, daemon=True)
+    input_thread = threading.Thread(target=client_to_server, daemon=True)
+    output_thread.start()
+    input_thread.start()
+    done.wait()
+
+    stopped = False
+    try:
+        proc.wait(timeout=SHUTDOWN_GRACE_SECONDS)
+    except subprocess.TimeoutExpired:
+        stopped = True
+        _kill_tree(proc, graceful=True)
+        try:
+            proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            _kill_tree(proc, graceful=False)
+            try:
+                proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                pass
+    output_thread.join(timeout=_OUTPUT_JOIN_SECONDS)  # let the server's last words reach the client
+    _kill_tree(proc, graceful=False)  # POSIX: stop descendants the server left behind
+    if not output_thread.is_alive():
+        try:
+            proc.stdout.close()
+        except (OSError, ValueError):
+            pass
+    router.finish()
+    return 0 if stopped else _exit_code(proc.returncode)
