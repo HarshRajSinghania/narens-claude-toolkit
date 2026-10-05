@@ -312,6 +312,16 @@ class CliTests(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("must not be negative", err)
 
+    def test_non_finite_late_minutes_is_a_clean_error(self):
+        for value in ("nan", "inf", "-inf"):
+            with self.subTest(value=value):
+                code, out, err = run_main(
+                    "--record", str(RECORDS / "healthy.json"), f"--late-minutes={value}", "--json"
+                )
+                self.assertEqual((code, out), (2, ""))
+                self.assertIn("finite", err)
+                self.assertNotIn("Traceback", err)
+
     def test_late_minutes_option_changes_the_verdict(self):
         path = self.write(json.dumps(rec(started_at="2026-10-04T07:10:00+00:00")))
         code, out, _ = run_main("--record", path, "--late-minutes", "5", "--json")

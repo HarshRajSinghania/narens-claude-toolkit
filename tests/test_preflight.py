@@ -192,6 +192,15 @@ class InputTests(unittest.TestCase):
             preflight.analyze("a" * (preflight.MAX_PROMPT_CHARS + 1))
         self.assertIn("20000", str(ctx.exception))
 
+    def test_non_finite_guard_hours_is_a_clean_error(self):
+        path = self.write(b"Run npm test.")
+        for value in ("nan", "inf", "-inf"):
+            with self.subTest(value=value):
+                code, out, err = run_main("--prompt-file", path, f"--guard-hours={value}", "--json")
+                self.assertEqual((code, out), (2, ""))
+                self.assertIn("finite", err)
+                self.assertNotIn("Traceback", err)
+
     def test_non_positive_guard_hours_is_an_error(self):
         for hours in (0, -1):
             with self.subTest(hours):
