@@ -114,6 +114,14 @@ class ReadMessagesTests(TempCase):
         start, _, _ = self.read([tb.assistant("a", ts="2026-10-02T00:00:00.000Z"), tb.user("2026-10-01T09:00:00.000Z")])
         self.assertEqual(start, "2026-10-01T09:00:00.000Z")
 
+    def test_message_timestamp_keeps_the_earliest_content_block(self):
+        _, messages, _ = self.read([
+            tb.assistant("a", ts="2026-10-05T10:05:00.000Z", out=20),
+            tb.assistant("a", ts="2026-10-05T10:00:00.000Z", out=10),
+        ])
+        self.assertEqual(messages[0]["timestamp"], "2026-10-05T10:00:00.000Z")
+        self.assertEqual(messages[0]["tokens"]["output"], 20)
+
     def test_unreadable_file_is_counted(self):
         quality = audit.new_quality()
         self.assertEqual(audit.read_messages(self.root / "missing.jsonl", quality), (None, []))
@@ -170,6 +178,66 @@ class LoadUnitsTests(TempCase):
         self.assertEqual(len(units), 1)
         units, _ = self.units(until="2026-09-30")
         self.assertEqual(len(units), 1)
+
+    def resumed_history(self):
+        old = tb.assistant("old", ts="2026-10-01T10:00:00.000Z", out=100)
+        tb.add_session(self.projects, "C--p", "a-original",
+                       [tb.user("2026-10-01T09:00:00.000Z"), old])
+        tb.add_session(self.projects, "C--p", "b-resumed", [
+            tb.user("2026-10-05T09:00:00.000Z"), old,
+            tb.assistant("new", ts="2026-10-05T09:01:00.000Z", out=50),
+        ])
+
+    def test_resumed_start_comes_from_owned_messages(self):
+        self.resumed_history()
+        units, _ = self.units()
+        self.assertEqual([u["start"] for u in units],
+                         ["2026-10-01T09:00:00.000Z", "2026-10-05T09:01:00.000Z"])
+        self.assertEqual(sum(m["tokens"]["output"] for u in units for m in u["messages"]), 150)
+        self.assertEqual([[m["id"] for m in u["messages"]] for u in units], [["old"], ["new"]])
+
+    def test_resumed_work_is_included_by_since_and_excluded_by_until(self):
+        self.resumed_history()
+        units, _ = self.units(since="2026-10-05")
+        self.assertEqual([[m["id"] for m in u["messages"]] for u in units], [["new"]])
+        units, _ = self.units(until="2026-10-01")
+        self.assertEqual([[m["id"] for m in u["messages"]] for u in units], [["old"]])
+
+    def test_resumed_summary_is_after_snapshot_cutoff(self):
+        self.resumed_history()
+        units, _ = self.units()
+        sums = [audit.summarize(u, RATES) for u in units]
+        cutoff = "2026-10-03T00:00:00.000Z"
+        self.assertEqual([s["tokens"]["output"] for s in sums if s["start"] > cutoff], [50])
+        self.assertEqual([s["tokens"]["output"] for s in sums if s["start"] <= cutoff], [100])
+        snapshot = audit.snapshot_data(
+            [s for s in sums if s["start"] <= cutoff], RATES, {}, now=cutoff,
+        )
+        comparison = audit.compare(snapshot, sums, RATES)["types"][0]
+        self.assertEqual(comparison["before"]["spawns"], 1)
+        self.assertEqual(comparison["after"]["spawns"], 1)
+        self.assertEqual(comparison["after"]["tokens_median"], 50)
+
+    def test_resumed_message_without_timestamp_keeps_existing_fallback(self):
+        old = tb.assistant("old", out=100)
+        new = tb.assistant("new", out=50)
+        del new["timestamp"]
+        tb.add_session(self.projects, "C--p", "a-original", [old])
+        tb.add_session(self.projects, "C--p", "b-resumed", [old, new])
+        units, _ = self.units()
+        self.assertEqual([u["start"] for u in units], [tb.DEFAULT_TS, tb.DEFAULT_TS])
+        self.assertEqual([[m["id"] for m in u["messages"]] for u in units], [["old"], ["new"]])
+
+    def test_resumed_subagent_uses_retained_message_start(self):
+        old = tb.assistant("old", out=100)
+        tb.add_session(self.projects, "C--p", "original", [old], subagents=[
+            {"id": "resume", "type": "reviewer", "records": [
+                old, tb.assistant("new", ts="2026-10-05T09:01:00.000Z", out=50),
+            ]},
+        ])
+        units, _ = self.units(since="2026-10-05")
+        self.assertEqual([(u["type"], u["start"]) for u in units],
+                         [("reviewer", "2026-10-05T09:01:00.000Z")])
 
     def test_project_dirs_selects_by_slug_and_reports_missing(self):
         tb.add_session(self.projects, audit.slug_for(self.root / "proj"), "s1", [tb.assistant("m", out=1)])

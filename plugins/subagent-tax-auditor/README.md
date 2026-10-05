@@ -74,7 +74,7 @@ Before it edits, it saves a snapshot of the per-type numbers. Later, `compare` s
 - Before/after compares different tasks run at different times. It shows a trend with a sample size, not proof.
 - Only transcripts still on disk are counted. Deleted or expired sessions are invisible.
 - It cannot edit built-in agent types, and it does not stop Claude Code from spawning agents.
-- Date filters apply per file (a main session or one subagent run) by the UTC date of its first timestamp, so a run late in the evening west of UTC can fall on the next day.
+- Date filters apply per file (a main session or one subagent run) by the UTC date of its first timestamp, so a run late in the evening west of UTC can fall on the next day. After copied history is removed from a resumed file, its start is the earliest retained assistant-message timestamp, when available; otherwise the original file timestamp is kept. Snapshot comparisons use this same corrected start.
 - A run counts as one spawn, on the model it started with. If it switched models partway, the later model's row shows its tokens and cost but 0 spawns.
 - Claude Code names a project's transcript folder after its path with every non-alphanumeric character turned into `-`. If a project seems missing, use `--all` or `--project PATH`.
 - Prices and the transcript format change. `rates.json` is dated (the report warns when it is over 90 days old), and the parser reports what it could not read.

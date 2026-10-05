@@ -125,9 +125,13 @@ def read_messages(path, quality):
                 seen = by_id[mid]["tokens"]
                 for kind in KINDS:
                     seen[kind] = max(seen[kind], tokens[kind])
+                first_stamp = by_id[mid]["timestamp"]
+                if isinstance(stamp, str) and (first_stamp is None or stamp < first_stamp):
+                    by_id[mid]["timestamp"] = stamp
             else:
                 by_id[mid] = {"id": mid if real_id else None,
-                              "model": model if isinstance(model, str) and model else "unknown", "tokens": tokens}
+                              "model": model if isinstance(model, str) and model else "unknown", "tokens": tokens,
+                              "timestamp": stamp if isinstance(stamp, str) else None}
                 order.append(mid)
     return start, [by_id[i] for i in order]
 
@@ -160,9 +164,17 @@ def _dedupe_across_files(units):
                 owner[message["id"]] = (unit["start"], index)
     kept = []
     for index, unit in enumerate(units):
-        unit["messages"] = [m for m in unit["messages"]
+        messages = unit["messages"]
+        unit["messages"] = [m for m in messages
                             if m["id"] is None or owner[m["id"]] == (unit["start"], index)]
         if unit["messages"]:
+            # Copied history must not date new work before --since or a snapshot cutoff.
+            # Preserve ordinary file starts (including their first user message) and
+            # the existing fallback when no retained assistant has a timestamp.
+            if len(unit["messages"]) < len(messages):
+                stamps = [m["timestamp"] for m in unit["messages"] if m["timestamp"] is not None]
+                if stamps:
+                    unit["start"] = min(stamps)
             kept.append(unit)
     return kept
 
