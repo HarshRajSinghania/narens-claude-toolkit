@@ -4,6 +4,7 @@ import json
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import helpers
@@ -38,6 +39,39 @@ def run_main(*argv):
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         code = diagnose.main(list(argv))
     return code, out.getvalue(), err.getvalue()
+
+
+class TimestampCompatibilityTests(unittest.TestCase):
+    def test_fractional_seconds_are_truncated_or_padded_to_microseconds(self):
+        for fraction, microsecond in (("1", 100000), ("123", 123000), ("12345", 123450),
+                                      ("3478805", 347880), ("9999999", 999999)):
+            for suffix in ("Z", "z", "", "+00:00"):
+                with self.subTest(fraction=fraction, suffix=suffix):
+                    actual = diagnose.parse_time(f"2026-10-01T21:22:39.{fraction}{suffix}", "at")
+                    self.assertEqual(actual, datetime(2026, 10, 1, 21, 22, 39, microsecond, timezone.utc))
+
+    def test_compact_timezone_offsets_preserve_the_instant(self):
+        for suffix, minutes in (("+0000", 0), ("+0530", 330), ("-0430", -270)):
+            for fraction in ("", ".3478805"):
+                with self.subTest(suffix=suffix, fraction=fraction):
+                    actual = diagnose.parse_time(f"2026-10-01T21:22:39{fraction}{suffix}", "at")
+                    expected = datetime(2026, 10, 1, 21, 22, 39,
+                                        347880 if fraction else 0, timezone(timedelta(minutes=minutes)))
+                    self.assertEqual(actual, expected)
+
+    def test_windows_machine_events_can_be_classified(self):
+        result = diagnose.classify(rec(
+            started_at=None, ended_at=None,
+            machine_events=[{"kind": "sleep", "at": "2026-10-03T21:22:39.3478805Z"}],
+        ))
+        self.assertEqual(result["verdict"], "slept-through")
+
+    def test_normalization_does_not_accept_malformed_timestamps(self):
+        for value in ("2026-13-01T21:22:39.1234567Z", "2026-10-01T21:22:39.123+2500",
+                      "2026-10-01T99:22:39.1234567Z"):
+            with self.subTest(value=value):
+                with self.assertRaises(diagnose.DiagnoseError):
+                    diagnose.parse_time(value, "at")
 
 
 class ClassifyTests(unittest.TestCase):

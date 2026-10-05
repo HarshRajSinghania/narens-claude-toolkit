@@ -9,6 +9,7 @@ Exit code 0 for any verdict, 2 when the record cannot be read.
 """
 import argparse
 import json
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -37,6 +38,14 @@ def parse_time(value, field):
     text = value.strip()
     if text[-1:] in ("Z", "z"):
         text = text[:-1] + "+00:00"
+    # Python 3.9/3.10 require 3 or 6 fractional digits and a colon in UTC offsets.
+    # Windows events use 100-nanosecond precision; datetime retains microseconds.
+    text = re.sub(
+        r"^(\d{4}-\d{2}-\d{2}.\d{2}:\d{2}:\d{2})\.(\d+)",
+        lambda match: match[1] + "." + match[2][:6].ljust(6, "0"),
+        text,
+    )
+    text = re.sub(r"([+-]\d{2})(\d{2})$", r"\1:\2", text)
     try:
         moment = datetime.fromisoformat(text)
     except ValueError:
