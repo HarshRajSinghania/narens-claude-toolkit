@@ -9,6 +9,7 @@ Exit code 0 for any verdict, 2 when the record cannot be read.
 """
 import argparse
 import json
+import math
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -206,6 +207,8 @@ def main(argv=None):
     parser.add_argument("--json", action="store_true", help="print JSON instead of text")
     args = parser.parse_args(argv)
     try:
+        if not math.isfinite(args.late_minutes):
+            raise DiagnoseError("--late-minutes must be finite")
         if args.late_minutes < 0:
             raise DiagnoseError("--late-minutes must not be negative")
         res = classify(load_record(args.record), args.late_minutes)

@@ -9,6 +9,7 @@ Exit code 0 on success, 2 when the prompt cannot be read.
 """
 import argparse
 import json
+import math
 import re
 import sys
 from pathlib import Path
@@ -175,6 +176,8 @@ def guard_snippet(hours):
 
 
 def analyze(text, guard_hours=DEFAULT_GUARD_HOURS):
+    if not math.isfinite(guard_hours):
+        raise PreflightError("--guard-hours must be finite")
     if guard_hours <= 0:
         raise PreflightError("--guard-hours must be greater than 0")
     if not text.strip():
