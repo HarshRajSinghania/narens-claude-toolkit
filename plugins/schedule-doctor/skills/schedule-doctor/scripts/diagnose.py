@@ -10,7 +10,7 @@ Exit code 0 for any verdict, 2 when the record cannot be read.
 import argparse
 import json
 import sys
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 LATE_MINUTES = 30
@@ -35,6 +35,12 @@ def parse_time(value, field):
     if not isinstance(value, str):
         raise DiagnoseError(f"{field}: expected an ISO-8601 string, got {type(value).__name__}")
     text = value.strip()
+    try:
+        date.fromisoformat(text)
+    except ValueError:
+        pass
+    else:
+        raise DiagnoseError(f"{field}: expected a time component, not a date-only value")
     if text[-1:] in ("Z", "z"):
         text = text[:-1] + "+00:00"
     try:
@@ -107,7 +113,7 @@ def classify(record, late_minutes=LATE_MINUTES):
     delay = None if started is None else round((started - scheduled).total_seconds() / 60, 1)
     error_text = record.get("error_text")
     if isinstance(error_text, str):
-        error_text = error_text[:MAX_ERROR_TEXT]
+        error_text = error_text.strip()[:MAX_ERROR_TEXT]
     evidence = {
         "surface": surface,
         "scheduled_for": record["scheduled_for"],
@@ -119,6 +125,8 @@ def classify(record, late_minutes=LATE_MINUTES):
     }
 
     tool = record.get("permission_denied_tool")
+    if tool is not None and not isinstance(tool, str):
+        raise DiagnoseError("permission_denied_tool: expected a string or null")
     last_event = record.get("last_event")
     last = norm(last_event)
     if tool or any(word in last or word in status for word in HALT_WORDS):
