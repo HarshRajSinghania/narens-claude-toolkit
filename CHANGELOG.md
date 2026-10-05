@@ -5,6 +5,7 @@ All notable changes are recorded here. Format follows [Keep a Changelog](https:/
 ## [Unreleased]
 
 ### Added
+- `subagent-meter` mod: a live status line showing how much of your session's tokens go to subagents (a share of output tokens and a share of all tokens, side by side) and which agent type uses the most. Tokens only, session scope, never changes a turn. The toolkit's first mod.
 - `schedule-doctor` skill: before you schedule a Claude task it lints the prompt (likely tools to pre-approve, a time guard against stale catch-up runs, time-relative wording) and checks whether your machine keeps awake; afterwards it classifies why a run did not fire (permission halt, slept through, late catch-up, failed, or not enough data). Covers Desktop scheduled tasks, Claude Code crons and cloud routines.
 - `subagent-tax-auditor` skill: reads your local session transcripts, shows which subagent types used up your quota (per type and model, with fixed context per spawn), recommends cheaper models, edits custom agents' `model` after confirmation with a backup and undo, and compares usage before and after.
 - `rule-promoter` skill: turns the enforceable rules in CLAUDE.md into hooks (protected paths, blocked commands, banned content, must-pass-before-stopping), proves each rule blocks a violation, and installs them into `.claude/settings.json` after confirmation.
