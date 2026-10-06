@@ -1,8 +1,8 @@
-# mcp-fixer: score and patch an MCP server's tool definitions
+# mcp-fixer: score, patch and benchmark an MCP server's tool definitions
 
 > Scores an MCP server's tool definitions with deterministic lint rules, so you can see what makes agents pick the wrong tool or waste tokens.
 
-Part of [Naren's Claude Toolkit](https://github.com/NarenDawar/narens-claude-toolkit). Three planned parts: **score** (finds the problems), **patch and wrap** (applies fixes without changing the server) and a benchmark that shows tool selection did not get worse. The first two exist; the benchmark does not, so this tool makes no claim that a patch improves tool selection.
+Part of [Naren's Claude Toolkit](https://github.com/NarenDawar/narens-claude-toolkit). Three parts: **score** (finds the problems), **patch and wrap** (applies fixes without changing the server) and **bench** (checks whether tool selection got worse). Bench can detect a drop; it cannot show that a patch improves anything, and it says so.
 
 ## What it does
 
@@ -92,6 +92,34 @@ Every field is optional. A parameter entry may set `description`, `type`, `enum`
 
 That configuration has not been tried in a real client yet; it is the standard `mcpServers` shape. Unlike `score`, the wrapper passes your whole environment to the real server, because it stands in for that server.
 
+## Check it: tasks and bench
+
+`mcp-fixer tasks` asks a model to write test requests for each of a server's tools and saves them to a file you can edit. `mcp-fixer bench` then runs every request against the original tool list and the patched one, exactly as `wrap` would serve it, and asks the model which tool it would choose. Nothing is ever called: the model only names a tool.
+
+```text
+PYTHONPATH=servers/mcp-fixer/src python -m mcp_fixer tasks --out tasks.json -- npx -y some-mcp-server
+# review and edit tasks.json: fix any request whose expected tool is wrong
+PYTHONPATH=servers/mcp-fixer/src python -m mcp_fixer bench --tasks tasks.json --patch orders.patch.json -- npx -y some-mcp-server
+```
+
+**Runners.** `--runner claude` (the default) runs `claude -p --tools "" --no-session-persistence --strict-mcp-config` (no built-in tools, and none of your MCP servers) with your existing login, so it needs no API key; it runs inside your own Claude Code configuration (CLAUDE.md, hooks, skills), which can influence replies, and on Windows a `claude` shim may drop the empty `--tools` argument (not checked in a live run). `--runner api` calls the Anthropic Messages API directly with temperature 0 and needs `ANTHROPIC_API_KEY` in the environment; the key is never printed or written anywhere. Use `--model` to pick the model.
+
+**The tasks** are generated from the original tool list only, each request written without the tool's name; requests that still contain the name are dropped. They are a starting point: the answer key is only as good as the file, so read it.
+
+**What bench does.** For every task and repeat (default 3) it shows the model the same tools in the same shuffled order, once as the server defines them and once patched, and scores the reply. A reply that is not a valid choice counts as wrong; a failed model call is retried once and then excluded and counted. A renamed tool's answer is mapped back to its original name. It makes `tasks x repeats x 2` model calls, prints that number first, and asks for `--yes` above 200.
+
+**The verdict** accounts for how much data there is:
+
+| Verdict | When | Exit code |
+| --- | --- | --- |
+| `worse` | the 95% interval of (patched minus original accuracy, paired by task) is entirely below zero | 1 |
+| `no drop detected` | at least 30 usable tasks and the interval's lower bound is above minus `--tolerance` (default 0.05) | 0 |
+| `inconclusive` | anything else: too few tasks, or an interval too wide to rule out a drop (the report says which, and about how many tasks it would take) | 0 |
+
+The report also shows each side's accuracy with a 95% Wilson interval, the invalid rate, and the token sizes before and after. It always ends with: "This measures whether a drop could be detected on these generated tasks; it does not show the patch improves tool selection."
+
+**Honest limits.** The tasks are written by a model, so they share its blind spots; one model is used per run, and one run is one sample. `no drop detected` is not evidence of an improvement. Nothing here has been run against a real server yet: a live run is yours to do.
+
 ## The rules
 
 | Rule | Severity | Fires when |
@@ -130,7 +158,7 @@ It is a lint score. It tells you the definitions have the kinds of problems that
 
 ## Not in this version
 
-Calling tools (so no check that errors are consistent), remote HTTP or OAuth connections (use `--tools-json` for those), any model, error normalization, and the accuracy benchmark.
+Calling tools (so no check that errors are consistent), remote HTTP or OAuth connections (use `--tools-json` for those), error normalization, and anything beyond choosing a tool: bench does not call tools, check arguments or test multi-step flows.
 
 ## Tests
 

@@ -13,6 +13,8 @@ from .report import render_json, render_text
 from .score import FILE_SOURCE, score_tools
 from .stdio_client import ClientError, list_tools_stdio
 from .wrap import run_wrapper
+from . import bench as benchmark
+from .runners import RunnerError, make_runner
 
 
 class UsageError(Exception):
@@ -71,6 +73,44 @@ def build_parser():
     )
     wrap.add_argument("--patch", required=True, metavar="FILE", help="the patch file (see mcp-fixer patch)")
     wrap.add_argument("--allow-stale", action="store_true", help="apply a patch entry even when the server's tool has changed since the patch was made")
+
+    def add_runner_options(sub_parser):
+        sub_parser.add_argument("--runner", choices=("claude", "api"), default="claude", help="how to reach a model: claude -p (default) or the Anthropic API (needs ANTHROPIC_API_KEY)")
+        sub_parser.add_argument("--model", metavar="M", help="the model to use (the api runner defaults to claude-sonnet-5-5)")
+
+    tasks = sub.add_parser(
+        "tasks",
+        usage="mcp-fixer tasks [options] (--tools-json FILE | -- SERVER_COMMAND [ARGS...])",
+        description=(
+            "Ask a model to write test requests for each of a server's tools and save them to a "
+            "tasks file you can review and edit. Read-only for the server; calls a model."
+        ),
+    )
+    _add_input_options(tasks)
+    add_runner_options(tasks)
+    tasks.add_argument("--per-tool", type=int, default=3, metavar="N", help="requests per tool, 1 to 10 (default 3)")
+    tasks.add_argument("--out", metavar="FILE", help="write the tasks to FILE instead of stdout (never overwrites without --force)")
+    tasks.add_argument("--force", action="store_true", help="overwrite an existing --out file")
+
+    bench = sub.add_parser(
+        "bench",
+        usage="mcp-fixer bench --tasks FILE --patch FILE [options] (--tools-json FILE | -- SERVER_COMMAND [ARGS...])",
+        description=(
+            "Run every task against the original tool list and the patched one (as wrap serves it) "
+            "and report both accuracies with a sample-size-aware verdict: worse, no drop detected "
+            "or inconclusive. Calls a model tasks x repeats x 2 times."
+        ),
+    )
+    _add_input_options(bench)
+    add_runner_options(bench)
+    bench.add_argument("--tasks", required=True, metavar="FILE", help="the tasks file (see mcp-fixer tasks)")
+    bench.add_argument("--patch", required=True, metavar="FILE", help="the patch file (see mcp-fixer patch)")
+    bench.add_argument("--repeats", type=int, default=3, metavar="R", help="runs per task and side (default 3)")
+    bench.add_argument("--tolerance", type=float, default=0.05, metavar="T", help="the drop that still counts as no drop (default 0.05)")
+    bench.add_argument("--seed", type=int, default=0, metavar="S", help="seed for the tool order and the bootstrap (default 0)")
+    bench.add_argument("--format", choices=("text", "json"), default="text", help="output format (default text)")
+    bench.add_argument("--out", metavar="FILE", help="write the report to FILE instead of stdout")
+    bench.add_argument("--yes", action="store_true", help="allow more than 200 model calls")
     return parser
 
 
@@ -175,6 +215,81 @@ def run_wrap(args, command):
     return run_wrapper(patch, command, args.allow_stale)
 
 
+CALL_LIMIT = 200
+
+
+def check_out_path(path):
+    """Fail before any paid model call when the output file could not be written anyway."""
+    if os.path.isdir(path):
+        raise UsageError(f"cannot write {path}: it is a folder")
+    if not os.path.isdir(os.path.dirname(os.path.abspath(path))):
+        raise UsageError(f"cannot write {path}: the folder does not exist")
+
+
+def write_or_show(path, text, overwrite):
+    """Write the result; when that fails after the work is done, show it instead of losing it."""
+    try:
+        write_file(path, text, overwrite)
+    except UsageError:
+        emit(text)
+        raise
+
+
+def _warn(text):
+    print(f"mcp-fixer: {text}", file=sys.stderr)
+
+
+def run_tasks(args, command):
+    if not 1 <= args.per_tool <= 10:
+        raise UsageError("--per-tool must be between 1 and 10")
+    if args.out:
+        check_out_path(args.out)
+        if not args.force and os.path.exists(args.out):
+            raise UsageError(f"{args.out} exists; use --force to overwrite")
+    tools, source = read_tools(args, command)
+    runner = make_runner(args.runner, args.model, max_tokens=1024)
+    data = benchmark.generate_tasks(tools, runner, args.per_tool, source, _warn)
+    text = benchmark.render_tasks(data)
+    if args.out:
+        write_or_show(args.out, text, args.force)
+    else:
+        emit(text)
+    return 0
+
+
+def run_bench(args, command):
+    if args.repeats < 1:
+        raise UsageError("--repeats must be at least 1")
+    if not math.isfinite(args.tolerance) or args.tolerance < 0:
+        raise UsageError("--tolerance must be a finite number, 0 or more")
+    if args.out:
+        check_out_path(args.out)
+    patch = load_patch(args.patch)
+    tasks = benchmark.load_tasks(args.tasks)
+    tools, _source = read_tools(args, command)
+    runner = make_runner(args.runner, args.model, max_tokens=64)
+    for warning in benchmark.check_tasks(tasks, tools):
+        _warn(warning)
+    calls = benchmark.estimate_calls(tasks, args.repeats)
+    note = f"{calls} model calls"
+    if args.runner == "api":
+        note += f", about {benchmark.estimate_input_tokens(tasks, tools, patch, args.repeats)} input tokens"
+    _warn(note)
+    if calls > CALL_LIMIT and not args.yes:
+        raise UsageError(f"this run makes {calls} model calls; pass --yes to continue")
+    report = benchmark.run_bench(tasks, tools, patch, runner, args.repeats, args.seed, args.tolerance)
+    text = (
+        benchmark.render_bench_json(report)
+        if args.format == "json"
+        else benchmark.render_bench_text(report)
+    )
+    if args.out:
+        write_or_show(args.out, text, True)
+    else:
+        emit(text)
+    return 1 if report["verdict"]["verdict"] == "worse" else 0
+
+
 def main(argv=None):
     args = list(sys.argv[1:] if argv is None else argv)
     command = []
@@ -182,10 +297,12 @@ def main(argv=None):
         split = args.index("--")
         command, args = args[split + 1:], args[:split]
     parsed = build_parser().parse_args(args)
-    handlers = {"score": run_score, "patch": run_patch, "wrap": run_wrap}
+    handlers = {
+        "score": run_score, "patch": run_patch, "wrap": run_wrap, "tasks": run_tasks, "bench": run_bench,
+    }
     try:
         return handlers[parsed.command](parsed, command)
-    except (UsageError, ClientError, PatchError) as exc:
+    except (UsageError, ClientError, PatchError, benchmark.BenchError, RunnerError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
