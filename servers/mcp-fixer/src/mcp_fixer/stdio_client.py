@@ -53,8 +53,12 @@ def resolve_command(command):
     return [program] + list(command[1:])
 
 
-def child_environment(extra=None):
-    env = {key: os.environ[key] for key in BASE_ENV_KEYS if key in os.environ}
+def child_environment(extra=None, inherit=False):
+    """The environment for a spawned server: the whole of ours, or only the base variables."""
+    if inherit:
+        env = dict(os.environ)
+    else:
+        env = {key: os.environ[key] for key in BASE_ENV_KEYS if key in os.environ}
     env.update(extra or {})
     return env
 
@@ -275,7 +279,7 @@ class _Session:
                 pass
 
 
-def _spawn(argv, env):
+def _spawn(argv, env, stderr=subprocess.PIPE):
     kwargs = {}
     if os.name != "nt":
         kwargs["start_new_session"] = True
@@ -284,7 +288,7 @@ def _spawn(argv, env):
             argv,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stderr=stderr,
             env=env,
             **kwargs,
         )

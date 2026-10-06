@@ -218,6 +218,83 @@ class ServerModeTests(CliCase):
         self.assertEqual(json.loads(out)["source"]["serverName"], "hello")
 
 
+class PatchCommandTests(CliCase):
+    def test_a_patch_is_written_to_stdout_and_validates(self):
+        code, out, err = run("patch", "--tools-json", MESSY)
+        self.assertEqual((code, err), (0, ""))
+        from mcp_fixer import patch_format
+        patch = patch_format.validate_patch(json.loads(out))
+        self.assertEqual(list(patch["tools"]), ["run", "searchItems"])
+
+    def test_the_same_input_gives_byte_identical_output(self):
+        self.assertEqual(run("patch", "--tools-json", MESSY)[1], run("patch", "--tools-json", MESSY)[1])
+
+    def test_out_writes_a_new_file_and_prints_nothing(self):
+        target = self.dir / "p.json"
+        code, out, err = run("patch", "--tools-json", MESSY, "--out", str(target))
+        self.assertEqual((code, out, err), (0, "", ""))
+        self.assertEqual(target.read_text(encoding="utf-8"), run("patch", "--tools-json", MESSY)[1])
+        self.assertNotIn(b"\r", target.read_bytes())
+
+    def test_an_existing_out_file_is_never_overwritten_without_force(self):
+        target = self.dir / "p.json"
+        target.write_text("my edits", encoding="utf-8")
+        self.assert_usage_error("patch", "--tools-json", MESSY, "--out", str(target), fragment="exists; use --force")
+        self.assertEqual(target.read_text(encoding="utf-8"), "my edits")
+
+    def test_force_overwrites(self):
+        target = self.dir / "p.json"
+        target.write_text("my edits", encoding="utf-8")
+        code, _, _ = run("patch", "--tools-json", MESSY, "--out", str(target), "--force")
+        self.assertEqual(code, 0)
+        self.assertIn('"patchVersion"', target.read_text(encoding="utf-8"))
+
+    def test_an_unwritable_out_is_a_usage_error(self):
+        self.assert_usage_error("patch", "--tools-json", CLEAN, "--out", str(self.dir / "no-dir" / "p.json"), fragment="cannot write")
+
+    def test_the_same_input_errors_as_score(self):
+        self.assert_usage_error("patch", fragment="--tools-json")
+        self.assert_usage_error("patch", "--tools-json", CLEAN, "--", sys.executable, "-V", fragment="not both")
+        self.assert_usage_error("patch", "--tools-json", str(self.dir / "nope.json"), fragment="cannot read")
+        self.assert_usage_error("patch", "--tools-json", self.write("bad.json", "{nope"), fragment="not valid JSON")
+        self.assert_usage_error("patch", "--tools-json", CLEAN, "--timeout", "nan")
+
+    def test_a_stdio_server_gives_a_patch_with_its_source(self):
+        args = ["--", sys.executable, str(support.FAKE_SERVER), "--mode", "normal", "--tools", CLEAN_TOOLS]
+        code, out, err = run("patch", "--timeout", "10", *args)
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(json.loads(out)["source"], {"serverName": "fake-server", "serverVersion": "1.2.3"})
+
+    def test_a_schema_nested_very_deeply_never_gives_a_traceback(self):
+        schema = '{"type":"object","properties":{"x":' * 900 + '{"type":"string"}' + "}}" * 900
+        text = '[{"name":"deep_tool","description":"A deeply nested tool schema here.","inputSchema":' + schema + "}]"
+        code, out, err = run("patch", "--tools-json", self.write("deep.json", text))
+        self.assertIn(code, (0, 2))
+        self.assertNotIn("Traceback", err)
+
+
+class WrapCommandTests(CliCase):
+    def test_a_missing_command_is_a_usage_error(self):
+        patch = self.write("p.json", json.dumps({"patchVersion": 1, "tools": {}}))
+        self.assert_usage_error("wrap", "--patch", patch, fragment="server command")
+
+    def test_a_missing_patch_file_is_a_usage_error(self):
+        self.assert_usage_error("wrap", "--patch", str(self.dir / "nope.json"), "--", sys.executable, "-V", fragment="cannot read")
+
+    def test_an_invalid_patch_is_a_usage_error_naming_the_tool(self):
+        patch = self.write("p.json", json.dumps({"patchVersion": 1, "tools": {"run": {"rename": ""}}}))
+        self.assert_usage_error("wrap", "--patch", patch, "--", sys.executable, "-V", fragment="tool 'run': rename must be")
+
+    def test_a_server_command_that_does_not_exist_is_a_usage_error(self):
+        patch = self.write("p.json", json.dumps({"patchVersion": 1, "tools": {}}))
+        self.assert_usage_error("wrap", "--patch", patch, "--", "definitely-not-a-real-command-xyz", fragment="cannot find the server command")
+
+    def test_the_patch_option_is_required(self):
+        code, out, err = run("wrap", "--", sys.executable, "-V")
+        self.assertEqual(code, 2)
+        self.assertIn("--patch", err)
+
+
 # A tools file for the fake server (a bare array, as the fake server expects).
 _TOOLS_DIR = tempfile.TemporaryDirectory()
 CLEAN_TOOLS = str(Path(_TOOLS_DIR.name) / "tools.json")
