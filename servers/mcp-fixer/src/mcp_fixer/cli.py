@@ -218,6 +218,23 @@ def run_wrap(args, command):
 CALL_LIMIT = 200
 
 
+def check_out_path(path):
+    """Fail before any paid model call when the output file could not be written anyway."""
+    if os.path.isdir(path):
+        raise UsageError(f"cannot write {path}: it is a folder")
+    if not os.path.isdir(os.path.dirname(os.path.abspath(path))):
+        raise UsageError(f"cannot write {path}: the folder does not exist")
+
+
+def write_or_show(path, text, overwrite):
+    """Write the result; when that fails after the work is done, show it instead of losing it."""
+    try:
+        write_file(path, text, overwrite)
+    except UsageError:
+        emit(text)
+        raise
+
+
 def _warn(text):
     print(f"mcp-fixer: {text}", file=sys.stderr)
 
@@ -225,14 +242,16 @@ def _warn(text):
 def run_tasks(args, command):
     if not 1 <= args.per_tool <= 10:
         raise UsageError("--per-tool must be between 1 and 10")
-    if args.out and not args.force and os.path.exists(args.out):
-        raise UsageError(f"{args.out} exists; use --force to overwrite")
+    if args.out:
+        check_out_path(args.out)
+        if not args.force and os.path.exists(args.out):
+            raise UsageError(f"{args.out} exists; use --force to overwrite")
     tools, source = read_tools(args, command)
     runner = make_runner(args.runner, args.model, max_tokens=1024)
     data = benchmark.generate_tasks(tools, runner, args.per_tool, source, _warn)
     text = benchmark.render_tasks(data)
     if args.out:
-        write_file(args.out, text, overwrite=args.force)
+        write_or_show(args.out, text, args.force)
     else:
         emit(text)
     return 0
@@ -243,6 +262,8 @@ def run_bench(args, command):
         raise UsageError("--repeats must be at least 1")
     if not math.isfinite(args.tolerance) or args.tolerance < 0:
         raise UsageError("--tolerance must be a finite number, 0 or more")
+    if args.out:
+        check_out_path(args.out)
     patch = load_patch(args.patch)
     tasks = benchmark.load_tasks(args.tasks)
     tools, _source = read_tools(args, command)
@@ -263,7 +284,7 @@ def run_bench(args, command):
         else benchmark.render_bench_text(report)
     )
     if args.out:
-        write_file(args.out, text, overwrite=True)
+        write_or_show(args.out, text, True)
     else:
         emit(text)
     return 1 if report["verdict"]["verdict"] == "worse" else 0

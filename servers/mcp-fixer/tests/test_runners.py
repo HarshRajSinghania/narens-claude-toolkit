@@ -39,7 +39,7 @@ class ClaudeRunnerTests(unittest.TestCase):
         reply = self.runner("ok", "--record", str(record)).complete("pick one é日")
         self.assertIn("get_item", reply)
         seen = json.loads(record.read_text(encoding="utf-8"))
-        self.assertEqual(seen["argv"], ["-p", "--tools", "", "--no-session-persistence"])
+        self.assertEqual(seen["argv"], ["-p", "--tools", "", "--no-session-persistence", "--strict-mcp-config"])
         self.assertEqual(seen["stdin"], "pick one é日")
 
     def test_a_model_is_passed_through(self):

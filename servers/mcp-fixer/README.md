@@ -102,7 +102,7 @@ PYTHONPATH=servers/mcp-fixer/src python -m mcp_fixer tasks --out tasks.json -- n
 PYTHONPATH=servers/mcp-fixer/src python -m mcp_fixer bench --tasks tasks.json --patch orders.patch.json -- npx -y some-mcp-server
 ```
 
-**Runners.** `--runner claude` (the default) runs `claude -p --tools "" --no-session-persistence` with your existing login, so it needs no API key; it runs inside your own Claude Code configuration (CLAUDE.md, hooks, skills), which can influence replies, and on Windows a `claude` shim may drop the empty `--tools` argument (not checked in a live run). `--runner api` calls the Anthropic Messages API directly with temperature 0 and needs `ANTHROPIC_API_KEY` in the environment; the key is never printed or written anywhere. Use `--model` to pick the model.
+**Runners.** `--runner claude` (the default) runs `claude -p --tools "" --no-session-persistence --strict-mcp-config` (no built-in tools, and none of your MCP servers) with your existing login, so it needs no API key; it runs inside your own Claude Code configuration (CLAUDE.md, hooks, skills), which can influence replies, and on Windows a `claude` shim may drop the empty `--tools` argument (not checked in a live run). `--runner api` calls the Anthropic Messages API directly with temperature 0 and needs `ANTHROPIC_API_KEY` in the environment; the key is never printed or written anywhere. Use `--model` to pick the model.
 
 **The tasks** are generated from the original tool list only, each request written without the tool's name; requests that still contain the name are dropped. They are a starting point: the answer key is only as good as the file, so read it.
 

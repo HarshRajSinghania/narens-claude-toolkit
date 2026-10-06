@@ -16,6 +16,8 @@ DISCLAIMER = (
     "it does not show the patch improves tool selection."
 )
 _MAX_NOTE = 300
+MAX_CONSECUTIVE_ERRORS = 5  # failed trials in a row before the run is stopped
+MAX_INVALID_RATE = 0.5  # more invalid replies than this makes a "no drop" verdict meaningless
 
 
 class BenchError(Exception):
@@ -242,12 +244,39 @@ def _side_summary(per_task):
     }
 
 
+def _checked_verdict(result, original, patched):
+    """Never let a broken run read as "no drop detected".
+
+    If the model never got a task right on the original list, or most replies were not a valid
+    choice, both sides are equally useless and every difference is trivially zero.
+    """
+    if result["verdict"] != "no drop detected":
+        return result
+    if original["correct"] == 0:
+        reason = (
+            "the model never picked the right tool on the original list, so this comparison says "
+            "nothing about the patch (check the tasks file and the runner)"
+        )
+    elif max(original["invalidRate"] or 0, patched["invalidRate"] or 0) > MAX_INVALID_RATE:
+        reason = (
+            "most replies were not a valid choice "
+            f"(original {_pct(original['invalidRate'])}, patched {_pct(patched['invalidRate'])}); "
+            "fix the runner or the tasks before trusting a comparison"
+        )
+    else:
+        return result
+    return {"verdict": "inconclusive", "reason": reason, "tasksNeeded": None}
+
+
 def run_bench(tasks_data, tools, patch, runner, repeats=3, seed=0, tolerance=0.05):
     original = valid_tools(tools)
     patched, rename_back, patch_warnings = patched_view(original, patch)
     tasks = tasks_data["tasks"]
     per_task = {"original": {}, "patched": {}}
     calls = 0
+    consecutive_errors = 0
+    last_error = None
+    any_scored = False
     for task in tasks:
         for repeat in range(repeats):
             order = _order(len(original), seed, task["id"], repeat)
@@ -260,7 +289,15 @@ def run_bench(tasks_data, tools, patch, runner, repeats=3, seed=0, tolerance=0.0
                 calls += attempts
                 if error is not None:
                     outcome = "errored"
+                    last_error = error
+                    consecutive_errors += 1
+                    if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
+                        raise BenchError(
+                            f"the model calls keep failing, so the run was stopped: {_clip(error)}"
+                        )
                 else:
+                    consecutive_errors = 0
+                    any_scored = True
                     choice = bench_prompts.parse_choice(text, names)
                     if choice is None:
                         outcome = "invalid"
@@ -269,6 +306,8 @@ def run_bench(tasks_data, tools, patch, runner, repeats=3, seed=0, tolerance=0.0
                             choice = rename_back.get(choice, choice)
                         outcome = "correct" if choice == task["expected"] else "wrong"
                 per_task[side].setdefault(task["id"], []).append(outcome)
+    if not any_scored:
+        raise BenchError(f"no model call succeeded: {_clip(last_error)}")
     diffs = []
     for task in tasks:
         a_original = _accuracy(per_task["original"][task["id"]])
@@ -302,7 +341,9 @@ def run_bench(tasks_data, tools, patch, runner, repeats=3, seed=0, tolerance=0.0
             "patched": score_tools(patched)["metrics"]["estimatedTokens"],
         },
         "patch": _patch_info(original, patch),
-        "verdict": bench_stats.verdict(len(diffs), mean, low, high, tolerance),
+        "verdict": _checked_verdict(
+            bench_stats.verdict(len(diffs), mean, low, high, tolerance), original_summary, patched_summary
+        ),
         "notes": notes,
         "disclaimer": DISCLAIMER,
     }

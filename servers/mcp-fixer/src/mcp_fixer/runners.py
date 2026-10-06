@@ -20,6 +20,16 @@ def _one_line(text, limit=200):
     return " ".join(str(text).split())[:limit]
 
 
+def _check_key(key):
+    """Refuse a key that cannot be a header value, without ever echoing it.
+
+    http.client would reject it and quote it in its own error text, which our redaction (which
+    looks for the raw key) would not recognise.
+    """
+    if not key or any(not 0x21 <= ord(char) <= 0x7E for char in key):
+        raise RunnerError("the API key contains spaces or control characters; check ANTHROPIC_API_KEY")
+
+
 class FakeRunner:
     """Calls a function instead of a model (for tests)."""
 
@@ -46,7 +56,9 @@ class ClaudeRunner:
         return f"claude -p ({self.model or 'default model'})"
 
     def complete(self, prompt):
-        argv = list(self.command) + ["-p", "--tools", "", "--no-session-persistence"]
+        # --strict-mcp-config: without it the user's own MCP servers (including the one being
+        # benchmarked) would still load, bias the model and could even be called.
+        argv = list(self.command) + ["-p", "--tools", "", "--no-session-persistence", "--strict-mcp-config"]
         if self.model:
             argv += ["--model", self.model]
         try:
@@ -91,6 +103,7 @@ class ApiRunner:
         return _one_line(str(text).replace(self._key, "[key]")) if self._key else _one_line(text)
 
     def complete(self, prompt):
+        _check_key(self._key)
         body = json.dumps(
             {
                 "model": self.model,
@@ -143,7 +156,9 @@ def make_runner(name, model=None, env=None, timeout=120, max_tokens=64):
         return ClaudeRunner(model=model, timeout=timeout)
     if name == "api":
         key = (env if env is not None else os.environ).get("ANTHROPIC_API_KEY")
+        key = (key or "").strip()  # a key read from a file often carries a trailing newline
         if not key:
             raise RunnerError("ANTHROPIC_API_KEY is not set; the api runner needs it")
+        _check_key(key)
         return ApiRunner(model or DEFAULT_API_MODEL, key, timeout, max_tokens)
     raise RunnerError(f"unknown runner {name!r}")
