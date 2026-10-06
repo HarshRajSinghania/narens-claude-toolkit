@@ -1755,7 +1755,7 @@ def render_bench_text(report):
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `python -m unittest discover -s servers/mcp-fixer/tests -p "test_bench.py" 2>&1 | tail -20`
-Expected: all PASS. If `test_invalid_replies_count_as_wrong_and_errored_are_excluded` disagrees on call counts: `need-1` raises on both attempts for both sides, so each errored trial costs 2 calls (60 trials + 2 retries = 62), and `need-0`/`need-1` prompts also match `need-10`..`need-19` by substring; if the test's substring match catches `need-10` and friends, tighten the test to the regex used in `expected_for` (match `need-0\b`) rather than changing the implementation.
+Expected: all PASS. If `test_invalid_replies_count_as_wrong_and_errored_are_excluded` disagrees on call counts: `need-1` raises on both attempts for both sides, so each errored trial costs 2 calls (60 trials + 2 retries = 62).
 
 - [ ] **Step 5: Commit**
 
