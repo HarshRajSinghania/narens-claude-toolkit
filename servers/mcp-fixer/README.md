@@ -1,8 +1,8 @@
-# mcp-fixer: score an MCP server's tool definitions
+# mcp-fixer: score and patch an MCP server's tool definitions
 
 > Scores an MCP server's tool definitions with deterministic lint rules, so you can see what makes agents pick the wrong tool or waste tokens.
 
-Part of [Naren's Claude Toolkit](https://github.com/NarenDawar/narens-claude-toolkit). This is the first of three planned parts: **score** (this), then a patcher and wrapper that apply the fixes, then a benchmark that shows tool selection did not get worse.
+Part of [Naren's Claude Toolkit](https://github.com/NarenDawar/narens-claude-toolkit). Three planned parts: **score** (finds the problems), **patch and wrap** (applies fixes without changing the server) and a benchmark that shows tool selection did not get worse. The first two exist; the benchmark does not, so this tool makes no claim that a patch improves tool selection.
 
 ## What it does
 
@@ -45,6 +45,53 @@ findings
 
 You are running whatever command you give it, exactly as when you add a server to Claude: only score servers you trust.
 
+## Fix it: patch and wrap
+
+`mcp-fixer patch` turns the findings into a patch file, and `mcp-fixer wrap` runs a proxy in front of the real server that shows the client the patched tool definitions. The real server is not changed. Options go before the `--`; everything after it is the server's own command.
+
+```text
+PYTHONPATH=servers/mcp-fixer/src python -m mcp_fixer patch --out orders.patch.json -- npx -y some-mcp-server
+# edit orders.patch.json: fill in the todo entries, check the review ones
+PYTHONPATH=servers/mcp-fixer/src python -m mcp_fixer wrap --patch orders.patch.json -- npx -y some-mcp-server
+```
+
+**What the generator fills in.** Enums that a parameter's description lists in prose, and descriptions over 500 characters trimmed to whole sentences. Each is noted under `review`, because an inferred enum may be incomplete and a trim loses text. **Everything else is a `todo`:** missing or short descriptions, undescribed or untyped parameters, generic names, a missing `required` list, near-duplicate descriptions. Those need real writing, by you or by Claude; the tool calls no model. `patch --out` never overwrites an existing file without `--force`.
+
+**The patch file** is plain JSON, keyed by each tool's original name:
+
+```json
+{
+  "patchVersion": 1,
+  "tools": {
+    "run": {
+      "base": "<fingerprint of the original tool; filled in by patch>",
+      "rename": "search_orders",
+      "description": "Search orders by status or customer.",
+      "params": {"order": {"description": "Sort order", "type": "string", "enum": ["asc", "desc"]}},
+      "required": ["order"]
+    }
+  }
+}
+```
+
+Every field is optional. A parameter entry may set `description`, `type`, `enum` and `default`. `review`, `todo`, `context` and `notes` are for people and are ignored by the wrapper. Unknown fields are an error, so typos are caught. A broken patch is a one-line error and exit code 2 before the real server starts. Tools with duplicate names cannot be patched separately: only the first gets an entry.
+
+**What the wrapper does.** It forwards every message as the original bytes, except: it patches the tool list the server sends, and it turns a renamed tool's name back to the original on `tools/call`. It never enforces an enum and never changes call arguments or results. If a tool has changed since the patch was made (its fingerprint no longer matches `base`), that tool is served unpatched with one warning on stderr; `--allow-stale` applies the patch anyway. Put it where the real server's command goes in your MCP client's config, for example:
+
+```json
+{
+  "mcpServers": {
+    "orders": {
+      "command": "python",
+      "args": ["-m", "mcp_fixer", "wrap", "--patch", "orders.patch.json", "--", "npx", "-y", "orders-server"],
+      "env": {"PYTHONPATH": "/path/to/servers/mcp-fixer/src"}
+    }
+  }
+}
+```
+
+That configuration has not been tried in a real client yet; it is the standard `mcpServers` shape. Unlike `score`, the wrapper passes your whole environment to the real server, because it stands in for that server.
+
 ## The rules
 
 | Rule | Severity | Fires when |
@@ -73,16 +120,17 @@ It is a lint score. It tells you the definitions have the kinds of problems that
 
 ## Report format
 
-`--format json` gives a stable report with `schemaVersion: 1` (source, score, metrics, findings with fix hints, notes) for other tools to consume. The planned patcher reads it.
+`--format json` gives a stable report with `schemaVersion: 1` (source, score, metrics, findings with fix hints, notes) for other tools to consume. `patch` builds on the same findings.
 
 ## Limits
 
 - On Linux and macOS the whole process group of a spawned server is stopped when scoring ends. On Windows a process the server started that outlives the server itself is not found and keeps running; the tool still finishes on time.
 - A server that floods the client with requests is cut off after 50 of them.
+- The wrapper does not rewrite errors or results (error normalization is not included), and a patch cannot target tools with duplicate names separately.
 
 ## Not in this version
 
-Calling tools (so no check that errors are consistent), remote HTTP or OAuth connections (use `--tools-json` for those), any model or accuracy benchmark, and writing patches.
+Calling tools (so no check that errors are consistent), remote HTTP or OAuth connections (use `--tools-json` for those), any model, error normalization, and the accuracy benchmark.
 
 ## Tests
 
