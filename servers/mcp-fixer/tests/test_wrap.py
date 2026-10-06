@@ -56,7 +56,6 @@ class WrapCase(unittest.TestCase):
         return [sys.executable, str(support.FAKE_SERVER), *self.server_args(mode, *extra)]
 
 
-@unittest.skip("needs the wrap subcommand (Task 5)")
 class InteractiveTests(WrapCase):
     def test_the_client_sees_the_patched_tool_list(self):
         c = self.client()
@@ -230,7 +229,6 @@ class LifecycleTests(WrapCase):
         self.assertNotIn("MCP_FIXER_TEST_MARKER", child_environment())
 
 
-@unittest.skip("needs the wrap subcommand (Task 5)")
 class BrokenPatchTests(WrapCase):
     def run_cli(self, patch_text):
         path = self.dir / "bad.json"

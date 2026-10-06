@@ -153,10 +153,10 @@ def run_wrapper(patch, command, allow_stale=False, stdin=None, stdout=None, log=
     Returns the exit code for the wrapper process. Raises ClientError when the server cannot be
     started.
     """
-    stdin = stdin if stdin is not None else sys.stdin.buffer
-    stdout = stdout if stdout is not None else sys.stdout.buffer
     router = Router(patch, allow_stale, log)
     proc = _spawn(resolve_command(command), child_environment(inherit=True), stderr=None)
+    stdin = stdin if stdin is not None else sys.stdin.buffer
+    stdout = stdout if stdout is not None else sys.stdout.buffer
     done = threading.Event()
     out_lock = threading.Lock()
 
