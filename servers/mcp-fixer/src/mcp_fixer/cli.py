@@ -2,6 +2,7 @@
 import argparse
 import json
 import math
+import os
 import sys
 from pathlib import Path
 
@@ -187,3 +188,18 @@ def main(argv=None):
     except (UsageError, ClientError, PatchError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
+
+
+def run():
+    """The console-script entry point: `main`, then leave without waiting on any thread.
+
+    The wrapper's client-reading thread may still be blocked on stdin; a normal interpreter
+    shutdown can then fail with a fatal error. Output is flushed first.
+    """
+    code = main()
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.flush()
+        except (OSError, ValueError):
+            pass
+    os._exit(code)

@@ -88,22 +88,22 @@ def _build_entry(tool, findings):
 
 
 def generate_patch(tools, source=None):
-    report = score_module.score_tools(tools, source)
     first = {}
     duplicates = []
+    unique = []
     for tool in tools:
         if isinstance(tool, dict) and isinstance(tool.get("name"), str) and tool["name"]:
             if tool["name"] in first:
                 if tool["name"] not in duplicates:
                     duplicates.append(tool["name"])
-            else:
-                first[tool["name"]] = tool
+                continue  # a later duplicate must not lend its findings to the first tool
+            first[tool["name"]] = tool
+        unique.append(tool)
+    # Server-level notes come from the full list; tool-level findings from the unique tools only.
+    notes = [f["message"] for f in score_module.score_tools(tools, source)["findings"] if f["tool"] is None]
     by_tool = {}
-    notes = []
-    for found in report["findings"]:
-        if found["tool"] is None:
-            notes.append(found["message"])
-        else:
+    for found in score_module.score_tools(unique, source)["findings"]:
+        if found["tool"] is not None:
             by_tool.setdefault(found["tool"], []).append(found)
     if duplicates:
         notes.append("duplicate tool names cannot be patched separately: " + ", ".join(sorted(duplicates)))

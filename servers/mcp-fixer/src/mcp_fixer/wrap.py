@@ -26,7 +26,8 @@ def _parse(raw):
 
 
 def _dump(message):
-    return (json.dumps(message, separators=(",", ":"), ensure_ascii=False) + "\n").encode("utf-8")
+    # ensure_ascii keeps a lone surrogate (which JavaScript servers can emit) encodable.
+    return (json.dumps(message, separators=(",", ":")) + "\n").encode("ascii")
 
 
 def _id_key(value):
@@ -82,7 +83,10 @@ class Router:
         result = message.get("result")
         if not isinstance(result, dict) or not isinstance(result.get("tools"), list):
             return raw
-        tools, changed = self._patch_page(result["tools"])
+        try:
+            tools, changed = self._patch_page(result["tools"])
+        except RecursionError:  # a tool nested too deeply to copy: forward it as it came
+            return raw
         if not changed:
             return raw
         patched = dict(message)
@@ -93,6 +97,15 @@ class Router:
         names_on_page = {
             t["name"] for t in tools if isinstance(t, dict) and isinstance(t.get("name"), str)
         }
+        listed_before = set(self.seen)
+        for name in sorted(names_on_page):
+            # The server itself lists this name, so a call to it must reach that real tool.
+            original = self.rename_back.pop(name, None)
+            if original is not None:
+                self._warn(
+                    ("shadow", name),
+                    f"the server lists a tool named {name!r}; the rename of {original!r} to it is no longer applied",
+                )
         out = []
         changed = False
         for tool in tools:
@@ -119,11 +132,11 @@ class Router:
                 self._warn(("apply", name, text), text)
             new_name = new["name"]
             if new_name != name:
-                if new_name in names_on_page:
+                if new_name in names_on_page or new_name in listed_before:
                     self._warn(
                         ("collision", name),
                         f"rename of tool {name!r} to {new_name!r} skipped: "
-                        "another tool on the page has that name",
+                        "the server lists another tool with that name",
                     )
                     new["name"] = name
                 else:
@@ -188,8 +201,18 @@ def run_wrapper(patch, command, allow_stale=False, stdin=None, stdout=None, log=
 
     output_thread = threading.Thread(target=server_to_client, daemon=True)
     input_thread = threading.Thread(target=client_to_server, daemon=True)
+    def server_exit():
+        # A descendant that inherited the server's stdout can keep that pipe open after the
+        # server itself is gone; the server's own exit ends the session too.
+        try:
+            proc.wait()
+        finally:
+            done.set()
+
+    exit_thread = threading.Thread(target=server_exit, daemon=True)
     output_thread.start()
     input_thread.start()
+    exit_thread.start()
     done.wait()
 
     stopped = False

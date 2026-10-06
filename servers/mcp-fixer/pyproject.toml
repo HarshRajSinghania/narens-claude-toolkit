@@ -13,7 +13,7 @@ authors = [{ name = "Naren" }]
 dependencies = []
 
 [project.scripts]
-mcp-fixer = "mcp_fixer.cli:main"
+mcp-fixer = "mcp_fixer.cli:run"
 
 [tool.setuptools.packages.find]
 where = ["src"]

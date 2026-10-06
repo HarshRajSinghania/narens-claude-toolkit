@@ -147,6 +147,28 @@ class GenerateTests(unittest.TestCase):
         text = patch_gen.render_patch(patch_gen.generate_patch([tool]))
         self.assertNotIn("\\u", text)
 
+    def test_findings_of_a_later_duplicate_never_land_on_the_first_tool(self):
+        first = {"name": "search", "inputSchema": {"type": "object", "properties": {}}}
+        second = {
+            "name": "search",
+            "description": " ".join(sentence(i) for i in range(30)),
+            "inputSchema": {"type": "object", "properties": {"mode": {"type": "string", "description": "Mode, one of: fast, slow"}}},
+        }
+        patch = patch_gen.generate_patch([first, second])  # used to raise KeyError
+        entry = patch["tools"]["search"]
+        self.assertEqual([t["rule"] for t in entry["todo"]], ["D001"])
+        self.assertNotIn("description", entry)
+        self.assertNotIn("params", entry)
+        self.assertNotIn("review", entry)
+        patch_format.validate_patch(patch)
+
+    def test_a_short_first_tool_is_not_told_it_was_trimmed(self):
+        first = {"name": "search", "description": "Short one.", "inputSchema": {"type": "object", "properties": {}}}
+        second = dict(first, description=" ".join(sentence(i) for i in range(30)))
+        entry = patch_gen.generate_patch([first, second])["tools"]["search"]
+        self.assertEqual([t["rule"] for t in entry["todo"]], ["D002"])
+        self.assertNotIn("review", entry)
+
 
 if __name__ == "__main__":
     unittest.main()
