@@ -180,7 +180,9 @@ class LoadTests(unittest.TestCase):
             "directory": (str(self.dir), "cannot read"),
             "not utf-8": (self.write(b"\x80\x81", "bad.json"), "is not UTF-8 text"),
             "not json": (self.write("{nope", "nj.json"), "is not valid JSON"),
-            "deep": (self.write("[" * 5000, "deep.json"), "nested too deeply"),
+            # Python 3.12 reports an unterminated deep array as a plain parse error, 3.11 and 3.13
+            # as "nested too deeply"; both are one line starting "is not valid JSON".
+            "deep": (self.write("[" * 5000, "deep.json"), "is not valid JSON"),
             "invalid patch": (self.write(json.dumps({"patchVersion": 2, "tools": {}}), "inv.json"), "patchVersion must be 1"),
         }
         for label, (path, fragment) in cases.items():

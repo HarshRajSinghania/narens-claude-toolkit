@@ -94,7 +94,7 @@ class ValidateTasksTests(unittest.TestCase):
             (root / "deep.json").write_text("[" * 5000, encoding="utf-8")
             (root / "bytes.json").write_bytes(b"\x80\x81")
             (root / "ok.json").write_text(json.dumps(make_tasks(1)), encoding="utf-8")
-            cases = {"nope.json": "cannot read", "bad.json": "not valid JSON", "deep.json": "nested too deeply", "bytes.json": "not UTF-8"}
+            cases = {"nope.json": "cannot read", "bad.json": "not valid JSON", "deep.json": "not valid JSON", "bytes.json": "not UTF-8"}
             for name, fragment in cases.items():
                 with self.subTest(name):
                     with self.assertRaises(bench.TasksError) as ctx:
